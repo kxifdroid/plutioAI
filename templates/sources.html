@@ -1,0 +1,951 @@
+{% extends "base.html" %}
+{% block title %}Saved Sources | PlutioAI{% endblock %}
+{% block header %}Saved Sources{% endblock %}
+{% block content %}
+<style>
+    /* Fix long URLs overflowing in modal */
+    #sourceDetailsContent a {
+        word-break: break-all;
+        overflow-wrap: break-word;
+    }
+    .source-card {
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 1.15rem;
+        margin-bottom: 0.85rem;
+        background: var(--surface);
+        transition: border-color 0.12s ease;
+    }
+    .source-card:hover {
+        border-color: var(--accent);
+    }
+    .source-thumbnail {
+        width: 100px;
+        height: 70px;
+        object-fit: cover;
+        border-radius: var(--radius-sm);
+        background: var(--surface-subtle);
+        border: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-primary);
+        font-size: 1.5rem;
+        flex-shrink: 0;
+    }
+    .source-thumbnail img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        border-radius: 8px;
+    }
+    .source-title {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: #212529;
+        margin-bottom: 0.25rem;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+    .source-url {
+        font-size: 0.8rem;
+        color: #6c757d;
+        text-decoration: none;
+        display: block;
+        margin-bottom: 0.5rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 100%;
+    }
+    .source-card .flex-grow-1 {
+        min-width: 0;
+        overflow: hidden;
+    }
+    .source-url:hover {
+        color: #0d6efd;
+    }
+    .source-description {
+        font-size: 0.9rem;
+        color: #495057;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        margin-bottom: 0.5rem;
+    }
+    .source-meta {
+        font-size: 0.75rem;
+        color: #6c757d;
+    }
+    .source-actions {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+    .empty-state {
+        text-align: center;
+        padding: 3rem 1.5rem;
+        background: var(--surface);
+        border: 1px dashed var(--border-strong);
+        border-radius: var(--radius);
+        margin-top: 1.5rem;
+    }
+    .empty-state h3 {
+        color: #495057;
+        margin-bottom: 1rem;
+    }
+    .empty-state p {
+        color: #6c757d;
+        margin-bottom: 1.5rem;
+    }
+    .page-header {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 1.5rem 1.75rem;
+        margin-bottom: 1.5rem;
+    }
+    .page-header h2 {
+        margin: 0 0 0.35rem 0;
+        font-weight: 600;
+        font-size: 1.45rem;
+        color: var(--text-primary);
+    }
+    .page-header p {
+        margin: 0;
+        color: var(--text-secondary);
+        font-size: 0.92rem;
+    }
+</style>
+
+<nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="{{ url_for('index') }}">Home</a></li>
+        <li class="breadcrumb-item active" aria-current="page">Sources</li>
+    </ol>
+</nav>
+
+<div class="page-header d-flex justify-content-between align-items-center">
+    <div>
+        <h2>📚 Saved URL Sources</h2>
+        <p>Content extracted from URLs, saved for generating more posts</p>
+    </div>
+    <button type="button" class="btn btn-primary" onclick="showAddUrlModal()">
+        ➕ Add URL
+    </button>
+</div>
+
+{% if sources %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <span class="results-count">
+        <strong>{{ sources|length }}</strong> saved source{% if sources|length != 1 %}s{% endif %}
+    </span>
+</div>
+
+<div class="sources-list">
+    {% for source in sources %}
+    <div class="source-card" data-source-id="{{ source.id }}">
+        <div class="d-flex gap-3">
+            <div class="source-thumbnail">
+                {% if source.og_image %}
+                <img src="{{ source.og_image }}" alt="Preview" onerror="this.style.display='none'; this.parentElement.innerHTML='🔗';">
+                {% elif source.is_github %}
+                🐙
+                {% else %}
+                🔗
+                {% endif %}
+            </div>
+            <div class="flex-grow-1">
+                <h5 class="source-title">{{ source.title or 'Untitled' }}</h5>
+                <a href="{{ source.url }}" target="_blank" rel="noopener" class="source-url">
+                    {{ source.url }}
+                </a>
+                {% if source.description %}
+                <p class="source-description">{{ source.description }}</p>
+                {% endif %}
+                <div class="source-meta">
+                    {% if source.is_github %}
+                    <span class="badge" style="background-color: #24292f; color: #fff;">🐙 GitHub</span>
+                    {% elif source.is_youtube %}
+                    <span class="badge" style="background-color: #ff0000; color: #fff;">▶ YouTube</span>
+                    {% endif %}
+                    {% if source.is_youtube and source.episode_status == 'complete' %}
+                    <span class="badge bg-success">Transcribed</span>
+                    {% elif source.is_youtube and source.episode_status == 'processing' %}
+                    <span class="badge bg-warning text-dark">Processing</span>
+                    {% elif source.is_youtube and source.episode_status == 'queued' %}
+                    <span class="badge bg-secondary">Queued</span>
+                    {% elif source.is_youtube and source.episode_status == 'error' %}
+                    <span class="badge bg-danger">Error</span>
+                    {% endif %}
+                    <span title="Created">📅 Saved: {{ source.created_at[:10] if source.created_at else 'Unknown' }}</span>
+                    {% if source.last_used_at %}
+                    <span class="ms-3" title="Last used">🕐 Last used: {{ source.last_used_at[:10] }}</span>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="source-actions align-self-center">
+                {% if source.is_github %}
+                <a href="{{ url_for('compose_page') }}?source_id={{ source.id }}" 
+                   class="btn btn-sm btn-primary" title="Generate posts from this source">
+                    ✨ Generate Posts
+                </a>
+                <button type="button" class="btn btn-sm btn-outline-secondary"
+                        onclick="refreshSource({{ source.id }})" title="Refresh repo data from GitHub">
+                    🔄 Refresh
+                </button>
+                {% elif source.is_youtube %}
+                    {% if source.episode_status == 'complete' %}
+                <a href="{{ url_for('process_episode', url=source.url, title=source.title) }}"
+                   class="btn btn-sm btn-success" title="View transcription results">
+                    View Results
+                </a>
+                <a href="{{ url_for('compose_page') }}?source_id={{ source.id }}" 
+                   class="btn btn-sm btn-primary" title="Generate posts from this source">
+                    ✨ Generate Posts
+                </a>
+                    {% elif source.episode_status in ('queued', 'processing') %}
+                <a href="{{ url_for('status_page') }}" class="btn btn-sm btn-warning" title="View processing status">
+                    ⏳ In Progress
+                </a>
+                    {% else %}
+                <form method="post" action="{{ url_for('transcribe_source', source_id=source.id) }}" class="d-inline">
+                    <button type="submit" class="btn btn-sm btn-primary" title="Transcribe this YouTube video">
+                        🎙️ Transcribe
+                    </button>
+                </form>
+                    {% endif %}
+                <button type="button" class="btn btn-sm btn-outline-secondary"
+                        onclick="refreshSource({{ source.id }})" title="Refresh metadata from YouTube">
+                    🔄 Refresh
+                </button>
+                {% else %}
+                <a href="{{ url_for('compose_page') }}?source_id={{ source.id }}" 
+                   class="btn btn-sm btn-primary" title="Generate posts from this source">
+                    ✨ Generate Posts
+                </a>
+                <button type="button" class="btn btn-sm btn-outline-secondary"
+                        onclick="refreshSource({{ source.id }})" title="Refresh metadata from source">
+                    🔄 Refresh
+                </button>
+                {% endif %}
+                <div class="btn-group btn-group-sm">
+                    <a href="{{ url_for('download_source_transcript_route', source_id=source.id) }}"
+                       class="btn btn-outline-secondary" title="Download content as text file">
+                        📥 .txt
+                    </a>
+                    {% if source.is_youtube %}
+                    <a href="{{ url_for('download_audio_route', source_id=source.id) }}"
+                       class="btn btn-outline-primary" title="Download audio as MP3">
+                        🎵 .mp3
+                    </a>
+                    {% endif %}
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-info"
+                        onclick="viewSourcePosts({{ source.id }})" title="View posts generated from this source">
+                    💬 Posts{% if source.post_count %} ({{ source.post_count }}){% endif %}
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" 
+                        onclick="viewSourceDetails({{ source.id }})" title="View full content">
+                    👁️ View
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-danger" 
+                        onclick="confirmDeleteSource({{ source.id }}, '{{ source.title|e }}')" title="Delete">
+                    🗑️
+                </button>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+    <h3>📭 No Saved Sources Yet</h3>
+    <p>Add article URLs, YouTube videos, or GitHub repos to extract and save content, or use the Command Center.</p>
+    <div class="d-flex gap-2 justify-content-center">
+        <button type="button" class="btn btn-primary" onclick="showAddUrlModal()">
+            ➕ Add URL
+        </button>
+        <a href="{{ url_for('compose_page') }}" class="btn btn-outline-primary">
+            ✨ Go to Command Center
+        </a>
+    </div>
+</div>
+{% endif %}
+
+<!-- Source Details Modal -->
+<div class="modal fade" id="sourceDetailsModal" tabindex="-1" aria-labelledby="sourceDetailsModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="sourceDetailsModalLabel">Source Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="sourceDetailsContent">
+                    <div class="text-center py-4">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <a href="#" id="downloadSourceTranscriptBtn" class="btn btn-outline-secondary">📥 Download Text (.txt)</a>
+                <a href="#" id="downloadSourceAudioBtn" class="btn btn-outline-primary d-none">🎵 Download Audio (.mp3)</a>
+                <button type="button" class="btn btn-outline-primary" id="reextractBtn" onclick="reextractSource()">
+                    🔄 Re-extract
+                </button>
+                <a href="#" id="generateFromSourceBtn" class="btn btn-primary">✨ Generate Posts</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add URL Modal -->
+<div class="modal fade" id="addUrlModal" tabindex="-1" aria-labelledby="addUrlModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="addUrlModalLabel">Add URL Source</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="addUrlError" class="alert alert-danger d-none"></div>
+                <div id="addUrlSuccess" class="alert alert-success d-none"></div>
+                <form id="addUrlForm" onsubmit="submitAddUrl(event)">
+                    <div class="mb-3">
+                        <label for="urlInput" class="form-label">URL</label>
+                        <input type="url" class="form-control" id="urlInput" 
+                               placeholder="https://example.com/article, YouTube URL, or GitHub repo" required>
+                        <div class="form-text">Enter the URL of an article, webpage, YouTube video, or GitHub repository to extract content from.</div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" form="addUrlForm" class="btn btn-primary" id="addUrlSubmitBtn">
+                    <span class="btn-text">Extract & Save</span>
+                    <span class="btn-loading d-none">
+                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                        Extracting...
+                    </span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Delete Source</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to delete "<strong id="deleteSourceTitle"></strong>"?</p>
+                <p class="text-muted small">This will remove the saved content but won't affect any posts already generated from it.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirmDeleteBtn" onclick="deleteSource()">Delete</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Source Posts Modal -->
+<div class="modal fade" id="sourcePostsModal" tabindex="-1" aria-labelledby="sourcePostsModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="sourcePostsModalLabel">Posts from this Source</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="sourcePostsContent">
+                    <div class="text-center py-4">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <a href="#" id="generateMoreFromSourceBtn" class="btn btn-primary">✨ Generate More</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+let deleteSourceId = null;
+let currentSourceId = null;
+let addUrlModal = null;
+
+const PLATFORM_META = {
+    linkedin: { label: 'LinkedIn', icon: '💼', badge: 'bg-primary' },
+    threads: { label: 'Threads', icon: '🧵', badge: 'bg-dark' },
+    facebook: { label: 'Facebook', icon: '📘', badge: 'bg-info' },
+    twitter: { label: 'X', icon: '𝕏', badge: 'bg-secondary' },
+};
+
+function viewSourcePosts(sourceId) {
+    currentSourceId = sourceId;
+    const modal = new bootstrap.Modal(document.getElementById('sourcePostsModal'));
+    const contentDiv = document.getElementById('sourcePostsContent');
+    const generateBtn = document.getElementById('generateMoreFromSourceBtn');
+
+    generateBtn.href = "{{ url_for('compose_page') }}?source_id=" + sourceId;
+
+    contentDiv.innerHTML = `
+        <div class="text-center py-4">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+        </div>
+    `;
+
+    modal.show();
+
+    fetch(`/sources/${sourceId}/posts`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                contentDiv.innerHTML = `<div class="alert alert-danger">${escapeHtml(data.error)}</div>`;
+                return;
+            }
+            renderSourcePosts(data.posts || []);
+        })
+        .catch(() => {
+            contentDiv.innerHTML = `<div class="alert alert-danger">Failed to load posts for this source.</div>`;
+        });
+}
+
+function renderSourcePosts(posts) {
+    const contentDiv = document.getElementById('sourcePostsContent');
+
+    if (!posts.length) {
+        contentDiv.innerHTML = `
+            <div class="text-center py-4 text-muted">
+                <p class="mb-2">No posts have been generated from this source yet.</p>
+                <a href="{{ url_for('compose_page') }}?source_id=${currentSourceId}" class="btn btn-sm btn-primary">
+                    ✨ Generate Posts
+                </a>
+            </div>
+        `;
+        return;
+    }
+
+    contentDiv.innerHTML = posts.map(post => {
+        const meta = PLATFORM_META[post.platform] || { label: post.platform, icon: '📝', badge: 'bg-secondary' };
+        const alreadyPosted = post.posted || post.used;
+        const postedBadge = post.posted
+            ? (post.posted.url
+                ? `<a href="${escapeHtml(post.posted.url)}" target="_blank" rel="noopener" class="badge bg-success text-decoration-none" title="Posted ${escapeHtml((post.posted.posted_at || '').slice(0, 16))} - click to view">🔗 Posted</a>`
+                : `<span class="badge bg-success">✓ Posted</span>`)
+            : (post.used ? `<span class="badge bg-success">✓ Used</span>` : `<span class="badge bg-light text-muted border">Not posted yet</span>`);
+
+        const repostLabel = alreadyPosted ? '🔁 Repost' : '🚀 Post Now';
+        const imageHtml = post.image_url
+            ? `<img src="${escapeHtml(post.image_url)}" alt="Post image" style="max-height:48px;max-width:80px;border-radius:6px;object-fit:cover;" class="ms-2">`
+            : '';
+
+        return `
+            <div class="border rounded p-3 mb-3" data-post-id="${post.id}">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge ${meta.badge}">${meta.icon} ${meta.label}</span>
+                        ${postedBadge}
+                    </div>
+                    <button type="button" class="btn btn-sm ${alreadyPosted ? 'btn-outline-secondary' : 'btn-primary'} repost-btn"
+                            onclick="repostSourcePost(${post.id}, '${post.platform}', this, ${alreadyPosted ? 'true' : 'false'})">
+                        ${repostLabel}
+                    </button>
+                </div>
+                <div class="d-flex align-items-start">
+                    <pre class="mb-0 flex-grow-1" style="white-space:pre-wrap;word-break:break-word;font-family:inherit;font-size:0.9rem;background:#f8f9fa;padding:0.75rem;border-radius:8px;">${escapeHtml(post.content)}</pre>
+                    ${imageHtml}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function repostSourcePost(postId, platform, btn, alreadyPosted) {
+    const meta = PLATFORM_META[platform] || { label: platform };
+    if (alreadyPosted && !confirm(`Re-publish this post to ${meta.label}?`)) {
+        return;
+    }
+
+    const originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span> Posting...';
+
+    fetch(`/compose/post/${postId}/${platform}`, { method: 'POST' })
+        .then(response => response.json().then(data => ({ status: response.status, data })))
+        .then(({ status, data }) => {
+            if (data.success) {
+                btn.classList.remove('btn-primary');
+                btn.classList.add('btn-success');
+                btn.innerHTML = '✓ Posted';
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.classList.remove('btn-success');
+                    btn.classList.add('btn-outline-secondary');
+                    btn.innerHTML = '🔁 Repost';
+                }, 2500);
+            } else {
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+                const msg = data.error || 'Failed to post.';
+                if (status === 401 || data.needs_configuration) {
+                    alert(`${meta.label}: ${msg}\n\nConnect or configure the account from the Status page.`);
+                } else {
+                    alert(`${meta.label}: ${msg}`);
+                }
+            }
+        })
+        .catch(() => {
+            btn.disabled = false;
+            btn.innerHTML = originalHtml;
+            alert('Failed to post. Please try again.');
+        });
+}
+
+function showAddUrlModal() {
+    // Reset form state
+    document.getElementById('urlInput').value = '';
+    document.getElementById('addUrlError').classList.add('d-none');
+    document.getElementById('addUrlSuccess').classList.add('d-none');
+    document.getElementById('addUrlForm').classList.remove('d-none');
+    
+    const submitBtn = document.getElementById('addUrlSubmitBtn');
+    submitBtn.disabled = false;
+    submitBtn.querySelector('.btn-text').classList.remove('d-none');
+    submitBtn.querySelector('.btn-loading').classList.add('d-none');
+    
+    addUrlModal = new bootstrap.Modal(document.getElementById('addUrlModal'));
+    addUrlModal.show();
+}
+
+function submitAddUrl(event) {
+    event.preventDefault();
+    
+    const urlInput = document.getElementById('urlInput');
+    const url = urlInput.value.trim();
+    const errorDiv = document.getElementById('addUrlError');
+    const successDiv = document.getElementById('addUrlSuccess');
+    const submitBtn = document.getElementById('addUrlSubmitBtn');
+    
+    if (!url) {
+        errorDiv.textContent = 'Please enter a URL';
+        errorDiv.classList.remove('d-none');
+        return;
+    }
+    
+    // Show loading state
+    errorDiv.classList.add('d-none');
+    successDiv.classList.add('d-none');
+    submitBtn.disabled = true;
+    submitBtn.querySelector('.btn-text').classList.add('d-none');
+    submitBtn.querySelector('.btn-loading').classList.remove('d-none');
+    
+    fetch('/sources', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ url: url })
+    })
+    .then(response => response.json().then(data => ({ status: response.status, data })))
+    .then(({ status, data }) => {
+        submitBtn.disabled = false;
+        submitBtn.querySelector('.btn-text').classList.remove('d-none');
+        submitBtn.querySelector('.btn-loading').classList.add('d-none');
+        
+        if (status === 409) {
+            // URL already exists
+            errorDiv.innerHTML = `This URL has already been saved. <a href="#" onclick="viewSourceDetails(${data.existing_id}); addUrlModal.hide(); return false;">View existing source</a>`;
+            errorDiv.classList.remove('d-none');
+            return;
+        }
+        
+        if (data.error) {
+            errorDiv.textContent = data.error;
+            errorDiv.classList.remove('d-none');
+            return;
+        }
+        
+        // Success
+        successDiv.innerHTML = `
+            <strong>Success!</strong> "${data.source.title}" has been saved.
+        `;
+        successDiv.classList.remove('d-none');
+        document.getElementById('addUrlForm').classList.add('d-none');
+        
+        if (data.is_youtube) {
+            successDiv.innerHTML += ' <br><small>YouTube video ready for transcription.</small>';
+            setTimeout(() => location.reload(), 1200);
+        } else if (data.is_github) {
+            successDiv.innerHTML += ' <br><small>GitHub repository data extracted.</small>';
+            addSourceCardToPage(data.source, {isGithub: true});
+            setTimeout(() => {
+                if (addUrlModal) {
+                    addUrlModal.hide();
+                }
+            }, 1500);
+        } else {
+            addSourceCardToPage(data.source);
+            setTimeout(() => {
+                if (addUrlModal) {
+                    addUrlModal.hide();
+                }
+            }, 1500);
+        }
+    })
+    .catch(err => {
+        submitBtn.disabled = false;
+        submitBtn.querySelector('.btn-text').classList.remove('d-none');
+        submitBtn.querySelector('.btn-loading').classList.add('d-none');
+        errorDiv.textContent = 'An error occurred. Please try again.';
+        errorDiv.classList.remove('d-none');
+    });
+}
+
+function addSourceCardToPage(source, opts) {
+    opts = opts || {};
+    // Check if we're showing the empty state
+    const emptyState = document.querySelector('.empty-state');
+    if (emptyState) {
+        location.reload();
+        return;
+    }
+    
+    // Update the count
+    const countSpan = document.querySelector('.results-count strong');
+    if (countSpan) {
+        const currentCount = parseInt(countSpan.textContent) || 0;
+        countSpan.textContent = currentCount + 1;
+        
+        const countText = countSpan.parentElement;
+        if (currentCount + 1 === 1) {
+            countText.innerHTML = '<strong>1</strong> saved source';
+        } else {
+            countText.innerHTML = `<strong>${currentCount + 1}</strong> saved sources`;
+        }
+    }
+    
+    // Create new source card
+    const sourcesList = document.querySelector('.sources-list');
+    if (sourcesList) {
+        const card = document.createElement('div');
+        card.className = 'source-card';
+        card.setAttribute('data-source-id', source.id);
+        
+        let thumbnailContent;
+        if (source.og_image) {
+            thumbnailContent = `<img src="${source.og_image}" alt="Preview" onerror="this.style.display='none'; this.parentElement.innerHTML='🔗';">`;
+        } else if (opts.isGithub) {
+            thumbnailContent = '🐙';
+        } else {
+            thumbnailContent = '🔗';
+        }
+        
+        const descriptionHtml = source.description 
+            ? `<p class="source-description">${escapeHtml(source.description)}</p>`
+            : '';
+        
+        const today = new Date().toISOString().slice(0, 10);
+
+        let badgeHtml = '';
+        if (opts.isGithub) {
+            badgeHtml = '<span class="badge" style="background-color: #24292f; color: #fff;">🐙 GitHub</span>';
+        }
+
+        let actionsHtml = `
+            <a href="{{ url_for('compose_page') }}?source_id=${source.id}" 
+               class="btn btn-sm btn-primary" title="Generate posts from this source">
+                ✨ Generate Posts
+            </a>`;
+        actionsHtml += `
+            <button type="button" class="btn btn-sm btn-outline-secondary"
+                    onclick="refreshSource(${source.id})" title="${opts.isGithub ? 'Refresh repo data from GitHub' : 'Refresh metadata from source'}">
+                🔄 Refresh
+            </button>`;
+        actionsHtml += `
+            <div class="btn-group btn-group-sm">
+                <a href="/sources/${source.id}/download/transcript"
+                   class="btn btn-outline-secondary" title="Download content as text file">
+                    📥 .txt
+                </a>
+                ${source.is_youtube || (source.url && (source.url.includes('youtube.com') || source.url.includes('youtu.be'))) ? `
+                <a href="/sources/${source.id}/download/audio"
+                   class="btn btn-outline-primary" title="Download audio as MP3">
+                    🎵 .mp3
+                </a>` : ''}
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-info"
+                    onclick="viewSourcePosts(${source.id})" title="View posts generated from this source">
+                💬 Posts
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" 
+                    onclick="viewSourceDetails(${source.id})" title="View full content">
+                👁️ View
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-danger" 
+                    onclick="confirmDeleteSource(${source.id}, '${escapeHtml(source.title)}')" title="Delete">
+                🗑️
+            </button>`;
+        
+        card.innerHTML = `
+            <div class="d-flex gap-3">
+                <div class="source-thumbnail">
+                    ${thumbnailContent}
+                </div>
+                <div class="flex-grow-1">
+                    <h5 class="source-title">${escapeHtml(source.title || 'Untitled')}</h5>
+                    <a href="${escapeHtml(source.url)}" target="_blank" rel="noopener" class="source-url">
+                        ${escapeHtml(source.url)}
+                    </a>
+                    ${descriptionHtml}
+                    <div class="source-meta">
+                        ${badgeHtml}
+                        <span title="Created">📅 Saved: ${today}</span>
+                    </div>
+                </div>
+                <div class="source-actions align-self-center">
+                    ${actionsHtml}
+                </div>
+            </div>
+        `;
+        
+        sourcesList.insertBefore(card, sourcesList.firstChild);
+    }
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function viewSourceDetails(sourceId) {
+    currentSourceId = sourceId;
+    const modal = new bootstrap.Modal(document.getElementById('sourceDetailsModal'));
+    const contentDiv = document.getElementById('sourceDetailsContent');
+    const generateBtn = document.getElementById('generateFromSourceBtn');
+    const reextractBtn = document.getElementById('reextractBtn');
+    
+    // Reset button state
+    reextractBtn.disabled = false;
+    reextractBtn.innerHTML = '🔄 Re-extract';
+    
+    // Show loading state
+    contentDiv.innerHTML = `
+        <div class="text-center py-4">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+        </div>
+    `;
+    
+    generateBtn.href = "{{ url_for('compose_page') }}?source_id=" + sourceId;
+    
+    modal.show();
+    
+    // Fetch source details
+    fetch(`/sources/${sourceId}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                contentDiv.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+                return;
+            }
+            
+            updateSourceDetailsContent(data);
+        })
+        .catch(err => {
+            contentDiv.innerHTML = `<div class="alert alert-danger">Failed to load source details</div>`;
+        });
+}
+
+function updateSourceDetailsContent(data) {
+    const contentDiv = document.getElementById('sourceDetailsContent');
+    contentDiv.innerHTML = `
+        <div class="mb-3">
+            <label class="form-label fw-bold">URL</label>
+            <p><a href="${data.url}" target="_blank" rel="noopener">${data.url}</a></p>
+        </div>
+        <div class="mb-3">
+            <label class="form-label fw-bold">Title</label>
+            <p>${data.title || '<em>No title</em>'}</p>
+        </div>
+        <div class="mb-3">
+            <label class="form-label fw-bold">Description</label>
+            <p>${data.description || '<em>No description</em>'}</p>
+        </div>
+        <div class="mb-3">
+            <label class="form-label fw-bold">Extracted Content <span class="text-muted fw-normal">(${data.content ? data.content.length.toLocaleString() : 0} chars)</span></label>
+            <div style="max-height: 400px; overflow-y: auto; background: #f8f9fa; padding: 1rem; border-radius: 8px; font-size: 0.9rem; white-space: pre-wrap;">
+                ${data.content || '<em>No content extracted</em>'}
+            </div>
+        </div>
+        ${data.og_image ? `
+        <div class="mb-3">
+            <label class="form-label fw-bold">Preview Image</label>
+            <div><img src="${data.og_image}" alt="Preview" style="max-width: 300px; border-radius: 8px;"></div>
+        </div>
+        ` : ''}
+    `;
+
+    // Wire up download buttons in modal footer
+    const dlTxtBtn = document.getElementById('downloadSourceTranscriptBtn');
+    if (dlTxtBtn) {
+        dlTxtBtn.href = `/sources/${data.id}/download/transcript`;
+    }
+    const dlAudioBtn = document.getElementById('downloadSourceAudioBtn');
+    if (dlAudioBtn) {
+        const isYt = data.is_youtube || (data.url && (data.url.includes('youtube.com') || data.url.includes('youtu.be')));
+        if (isYt) {
+            dlAudioBtn.href = `/sources/${data.id}/download/audio`;
+            dlAudioBtn.classList.remove('d-none');
+        } else {
+            dlAudioBtn.classList.add('d-none');
+        }
+    }
+}
+
+function reextractSource() {
+    if (!currentSourceId) return;
+    
+    const reextractBtn = document.getElementById('reextractBtn');
+    const contentDiv = document.getElementById('sourceDetailsContent');
+    
+    // Show loading state
+    reextractBtn.disabled = true;
+    reextractBtn.innerHTML = `
+        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+        Extracting...
+    `;
+    
+    fetch(`/sources/${currentSourceId}/reextract`, { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            reextractBtn.disabled = false;
+            reextractBtn.innerHTML = '🔄 Re-extract';
+            
+            if (data.error) {
+                alert('Re-extraction failed: ' + data.error);
+                return;
+            }
+            
+            // Update the modal content with new data
+            updateSourceDetailsContent(data.source);
+            
+            // Show success message
+            const alertDiv = document.createElement('div');
+            alertDiv.className = 'alert alert-success alert-dismissible fade show mb-3';
+            alertDiv.innerHTML = `
+                Content re-extracted successfully!
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            contentDiv.insertBefore(alertDiv, contentDiv.firstChild);
+        })
+        .catch(err => {
+            reextractBtn.disabled = false;
+            reextractBtn.innerHTML = '🔄 Re-extract';
+            alert('Re-extraction failed. Please try again.');
+        });
+}
+
+function refreshSource(sourceId) {
+    const card = document.querySelector(`[data-source-id="${sourceId}"]`);
+    const btn = card ? card.querySelector('[onclick*="refreshSource"]') : null;
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span>';
+    }
+
+    fetch(`/sources/${sourceId}/reextract`, { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '🔄 Refresh';
+            }
+            if (data.error) {
+                alert('Refresh failed: ' + data.error);
+                return;
+            }
+            if (card && data.source) {
+                const titleEl = card.querySelector('.source-title');
+                const descEl = card.querySelector('.source-description');
+                if (titleEl) titleEl.textContent = data.source.title || 'Untitled';
+                if (descEl) descEl.textContent = data.source.description || '';
+
+                const thumbEl = card.querySelector('.source-thumbnail');
+                if (thumbEl) {
+                    if (data.source.og_image) {
+                        thumbEl.innerHTML = `<img src="${escapeHtml(data.source.og_image)}" alt="Preview" onerror="this.style.display='none'; this.parentElement.innerHTML='🔗';">`;
+                    } else {
+                        thumbEl.innerHTML = '🔗';
+                    }
+                }
+            }
+        })
+        .catch(() => {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '🔄 Refresh';
+            }
+            alert('Refresh failed. Please try again.');
+        });
+}
+
+function confirmDeleteSource(sourceId, title) {
+    deleteSourceId = sourceId;
+    document.getElementById('deleteSourceTitle').textContent = title || 'this source';
+    const modal = new bootstrap.Modal(document.getElementById('deleteModal'));
+    modal.show();
+}
+
+function deleteSource() {
+    if (!deleteSourceId) return;
+    
+    fetch(`/sources/${deleteSourceId}`, { method: 'DELETE' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Remove the card from the page
+                const card = document.querySelector(`[data-source-id="${deleteSourceId}"]`);
+                if (card) {
+                    card.remove();
+                }
+                // Close modal
+                bootstrap.Modal.getInstance(document.getElementById('deleteModal')).hide();
+                
+                // Check if no sources left
+                const remainingCards = document.querySelectorAll('.source-card');
+                if (remainingCards.length === 0) {
+                    location.reload();
+                }
+            } else {
+                alert(data.error || 'Failed to delete source');
+            }
+        })
+        .catch(err => {
+            alert('Failed to delete source');
+        });
+}
+</script>
+{% endblock %}

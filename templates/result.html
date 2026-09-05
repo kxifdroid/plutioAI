@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block header %}{{ title }}{% endblock %}
+{% block content %}
+{% if is_text %}
+<div class="alert alert-light border mb-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div>
+        <strong>📄 Text Article</strong> — 
+        <a href="{{ original_link }}" target="_blank" class="alert-link">Read original article ↗</a>
+    </div>
+    <a href="{{ url_for('download_transcript_route', url=url, title=title) }}" class="btn btn-sm btn-outline-secondary">
+        📥 Download Content (.txt)
+    </a>
+</div>
+{% else %}
+<div class="card mb-3 border-0 bg-light p-3 rounded">
+    {% if is_youtube %}
+    <audio controls src="{{ url_for('stream_audio_route', url=url) }}" class="w-100 mb-2">
+        Your browser does not support the audio element.
+    </audio>
+    {% else %}
+    <audio controls src="{{ url }}" class="w-100 mb-2">
+        Your browser does not support the audio element.
+    </audio>
+    {% endif %}
+    <div class="d-flex flex-wrap gap-2 align-items-center justify-content-between">
+        <div class="d-flex gap-2">
+            <a href="{{ url_for('download_audio_route', url=url, title=title) }}" class="btn btn-sm btn-primary">
+                🎵 Download Audio (.mp3)
+            </a>
+            <a href="{{ url_for('download_transcript_route', url=url, title=title) }}" class="btn btn-sm btn-outline-secondary">
+                📥 Download Transcript (.txt)
+            </a>
+        </div>
+        {% if is_youtube %}
+        <span class="badge bg-danger">▶ YouTube Audio</span>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+{% if description %}
+<p class="mb-4">{{ description }}</p>
+{% endif %}
+<div class="row gy-4">
+    <div class="col-md-6">
+        <h2>Summary</h2>
+        <div class="bg-light p-3 rounded summary-content" data-markdown>{{ summary }}</div>
+    </div>
+    <div class="col-md-6">
+        <h2>Action Items</h2>
+        <form method="post" action="{{ url_for('create_jira') }}" class="mb-3">
+            <input type="hidden" name="title" value="{{ title }}">
+            <input type="hidden" name="episode_url" value="{{ url }}">
+            <ul>
+            {% for item in actions %}
+                <li>
+                    <label>
+                        <input type="checkbox" name="items" value="{{ item }}">
+                        {{ item }}
+                    </label>
+                </li>
+            {% endfor %}
+            </ul>
+            <input type="submit" class="btn btn-primary" value="Create JIRA Tickets">
+        </form>
+        {% if tickets %}
+        <h3>JIRA Tickets</h3>
+        <ul>
+        {% for t in tickets %}
+            <li>
+                <a href="{{ t.ticket_url }}" target="_blank">{{ t.ticket_key }}</a>
+                ({{ t.status }}) - {{ t.action_item }}
+                {% if t.transitions %}
+                <form method="post" action="{{ url_for('update_ticket') }}" class="d-inline">
+                    <input type="hidden" name="ticket_key" value="{{ t.ticket_key }}">
+                    <input type="hidden" name="ref" value="{{ current_url }}">
+                    <select name="transition_id" class="form-select d-inline w-auto">
+                    {% for tr in t.transitions %}
+                        <option value="{{ tr.id }}">{{ tr.name }}</option>
+                    {% endfor %}
+                    </select>
+                    <button type="submit" class="btn btn-sm btn-secondary">Update</button>
+                </form>
+                {% endif %}
+            </li>
+        {% endfor %}
+        </ul>
+        {% endif %}
+    </div>
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h2 class="mb-0">{% if is_text %}Article Content{% else %}Transcript{% endif %}</h2>
+            <a href="{{ url_for('download_transcript_route', url=url, title=title) }}" class="btn btn-sm btn-outline-secondary">
+                📥 Download {% if is_text %}Content{% else %}Transcript{% endif %} (.txt)
+            </a>
+        </div>
+        <details>
+            <summary class="mb-2">Show {% if is_text %}content{% else %}transcript{% endif %}</summary>
+            <pre class="bg-light p-3 rounded" style="white-space: pre-wrap; word-break: break-word;">{{ transcript }}</pre>
+        </details>
+    </div>
+    <div class="col-12 mt-4">
+        <div class="card border-primary">
+            <div class="card-header bg-primary text-white">
+                <h2 class="mb-0 h5">✍️ Generate Article</h2>
+            </div>
+            <div class="card-body">
+                <p class="text-muted">Create a blog post or article based on this {% if is_text %}source article{% else %}podcast episode{% endif %}. Specify a topic to focus on—like cybersecurity, privacy, or a specific technology discussed.</p>
+                <form method="post" action="{{ url_for('create_article') }}" data-processing>
+                    <input type="hidden" name="episode_url" value="{{ url }}">
+                    <div class="mb-3">
+                        <label for="topic" class="form-label fw-bold">Topic / Focus</label>
+                        <input type="text" class="form-control" id="topic" name="topic" 
+                               placeholder="e.g., Privacy implications of AI assistants, Zero-trust security architecture, etc."
+                               required>
+                        <div class="form-text">What angle or subject should the article focus on?</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="style" class="form-label fw-bold">Article Style</label>
+                        <select class="form-select" id="style" name="style">
+                            <option value="blog" selected>Blog Post - Conversational and engaging</option>
+                            <option value="news">News Article - Factual and objective</option>
+                            <option value="opinion">Opinion/Editorial - Analysis with perspective</option>
+                            <option value="technical">Technical Deep-Dive - Detailed for practitioners</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="extra_context" class="form-label fw-bold">Additional Context <span class="text-muted fw-normal">(optional)</span></label>
+                        <textarea class="form-control" id="extra_context" name="extra_context" rows="3"
+                                  placeholder="Add any extra context, specific points to emphasize, your own insights, or instructions for the article..."></textarea>
+                        <div class="form-text">Provide additional information or guidance to shape the article—background context, key points to highlight, your perspective, etc.</div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">
+                        <span class="spinner-border spinner-border-sm d-none" role="status"></span>
+                        Generate Article
+                    </button>
+                </form>
+                {% if articles %}
+                <hr>
+                <h6>Previously Generated Articles</h6>
+                <ul class="list-unstyled">
+                {% for a in articles %}
+                    <li class="mb-1">
+                        <a href="{{ url_for('view_article', article_id=a.id) }}">{{ a.topic }}</a>
+                        <span class="badge bg-secondary">{{ a.style }}</span>
+                        <small class="text-muted">{{ a.created_at }}</small>
+                    </li>
+                {% endfor %}
+                </ul>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% if feed_id %}
+<p class="mt-4"><a class="btn btn-secondary" href="{{ url_for('view_feed', feed_id=feed_id) }}">Back to feed</a></p>
+{% else %}
+<p class="mt-4"><a class="btn btn-secondary" href="{{ url_for('index') }}">Home</a></p>
+{% endif %}
+{% endblock %}

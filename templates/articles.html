@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% from 'partials/macros.html' import page_header, empty_state %}
+
+{% block title %}Articles | PlutioAI{% endblock %}
+
+{% block content %}
+<div class="mb-4 pb-2 border-bottom">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div>
+            <h1 style="font-size: 1.55rem; margin-bottom: 0.25rem;">Generated Articles</h1>
+            <p class="text-secondary mb-0">Long-form editorial articles generated from source material, audio transcriptions, and research.</p>
+        </div>
+        <div class="btn-group btn-group-sm">
+            <a href="{{ url_for('sources_page') }}" class="btn btn-outline-secondary">Sources</a>
+            <a href="{{ url_for('view_articles') }}" class="btn btn-secondary active">Articles</a>
+            <a href="{{ url_for('view_tickets') }}" class="btn btn-outline-secondary">Tickets</a>
+            <a href="{{ url_for('library_page') }}" class="btn btn-outline-secondary">Files</a>
+        </div>
+    </div>
+</div>
+
+<!-- Filter Bar -->
+<div class="filter-bar mb-3">
+    <form method="get" class="row g-2 align-items-end">
+        <div class="col-md-3">
+            <label class="form-label">Search</label>
+            <input type="text" class="form-control" name="q" value="{{ search_query }}" placeholder="Search topics, episodes...">
+        </div>
+        <div class="col-md-2">
+            <label class="form-label">Style</label>
+            <select name="style" class="form-select">
+                <option value="">All Styles</option>
+                {% for s in all_styles %}
+                <option value="{{ s }}" {% if filter_style == s %}selected{% endif %}>{{ s|capitalize }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label">Source</label>
+            <select name="podcast" class="form-select">
+                <option value="">All Sources</option>
+                {% for p in all_podcasts %}
+                <option value="{{ p }}" {% if filter_podcast == p %}selected{% endif %}>{{ p[:25] }}{% if p|length > 25 %}...{% endif %}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label">Sort By</label>
+            <select name="sort" class="form-select">
+                <option value="date" {% if sort_by == 'date' %}selected{% endif %}>Date Created</option>
+                <option value="topic" {% if sort_by == 'topic' %}selected{% endif %}>Topic</option>
+                <option value="style" {% if sort_by == 'style' %}selected{% endif %}>Style</option>
+                <option value="podcast" {% if sort_by == 'podcast' %}selected{% endif %}>Source</option>
+            </select>
+        </div>
+        <div class="col-md-1">
+            <label class="form-label">Order</label>
+            <select name="order" class="form-select">
+                <option value="desc" {% if sort_order == 'desc' %}selected{% endif %}>↓</option>
+                <option value="asc" {% if sort_order == 'asc' %}selected{% endif %}>↑</option>
+            </select>
+        </div>
+        <div class="col-md-2">
+            <button type="submit" class="btn btn-secondary w-100">Apply</button>
+        </div>
+    </form>
+</div>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <span class="results-count">
+        Showing <strong>{{ articles|length }}</strong> article{% if articles|length != 1 %}s{% endif %}
+        {% if filter_style or filter_podcast or search_query %}
+        (filtered)
+        <a href="{{ url_for('view_articles') }}" class="ms-2 text-decoration-underline">Clear filters</a>
+        {% endif %}
+    </span>
+</div>
+
+{% if articles %}
+<div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-3 mb-4">
+    {% for article in articles %}
+    <div class="col">
+        <div class="hairline-card h-100 d-flex flex-column">
+            <div class="hairline-card__body flex-grow-1">
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                    <span class="badge bg-secondary border text-capitalize">{{ article.style }}</span>
+                    {% if article.source_type == 'agent' %}
+                    <small class="text-muted" title="Prepared by the content agent">Agent</small>
+                    {% else %}
+                    <small class="text-muted text-truncate" style="max-width: 140px;">{{ article.podcast_title or 'Podcast' }}</small>
+                    {% endif %}
+                </div>
+                <h3 style="font-size: 1.05rem; margin-bottom: 0.4rem;">{{ article.topic }}</h3>
+                {% if article.episode_title %}
+                <p class="small text-muted mb-2">
+                    Source: <em>{{ article.episode_title[:38] }}{% if article.episode_title|length > 38 %}...{% endif %}</em>
+                </p>
+                {% endif %}
+                <p class="small text-secondary mb-3">
+                    {{ article.content[:180] | striptags }}{% if article.content|length > 180 %}...{% endif %}
+                </p>
+            </div>
+            <div class="card-footer bg-transparent d-flex justify-content-between align-items-center">
+                <small class="text-muted">{{ article.created_at[:10] if article.created_at else '' }}</small>
+                <div class="btn-group btn-group-sm" role="group">
+                    <a href="{{ url_for('view_article', article_id=article.id) }}" class="btn btn-outline-primary">Read</a>
+                    <a href="{{ url_for('edit_article', article_id=article.id) }}" class="btn btn-outline-secondary">Edit</a>
+                    <form method="post" action="{{ url_for('remove_article', article_id=article.id) }}" class="d-inline"
+                          onsubmit="return confirm('Delete this article?');">
+                        <button type="submit" class="btn btn-outline-danger" style="border-top-left-radius: 0; border-bottom-left-radius: 0;">&times;</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% if pagination and pagination.total_pages > 1 %}
+<nav aria-label="Articles pagination" class="mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <small class="text-muted">
+            Showing {{ (pagination.page - 1) * pagination.per_page + 1 }}-{{ [pagination.page * pagination.per_page, pagination.total_items] | min }} of {{ pagination.total_items }} articles
+        </small>
+        <div class="btn-group btn-group-sm">
+            <a href="{{ url_for('view_articles', page=pagination.page, per_page=10, style=filter_style, podcast=filter_podcast, sort=sort_by, order=sort_order, q=search_query) }}" 
+               class="btn btn-outline-secondary {% if pagination.per_page == 10 %}active{% endif %}">10</a>
+            <a href="{{ url_for('view_articles', page=1, per_page=25, style=filter_style, podcast=filter_podcast, sort=sort_by, order=sort_order, q=search_query) }}" 
+               class="btn btn-outline-secondary {% if pagination.per_page == 25 %}active{% endif %}">25</a>
+            <a href="{{ url_for('view_articles', page=1, per_page=50, style=filter_style, podcast=filter_podcast, sort=sort_by, order=sort_order, q=search_query) }}" 
+               class="btn btn-outline-secondary {% if pagination.per_page == 50 %}active{% endif %}">50</a>
+        </div>
+    </div>
+    <ul class="pagination justify-content-center">
+        <li class="page-item {% if not pagination.has_prev %}disabled{% endif %}">
+            <a class="page-link" href="{{ url_for('view_articles', page=1, per_page=pagination.per_page, style=filter_style, podcast=filter_podcast, sort=sort_by, order=sort_order, q=search_query) }}">
+                &laquo; First
+            </a>
+        </li>
+        <li class="page-item {% if not pagination.has_prev %}disabled{% endif %}">
+            <a class="page-link" href="{{ url_for('view_articles', page=pagination.prev_page or 1, per_page=pagination.per_page, style=filter_style, podcast=filter_podcast, sort=sort_by, order=sort_order, q=search_query) }}">
+                &lsaquo; Prev
+            </a>
+        </li>
+        
+        {% for p in range(1, pagination.total_pages + 1) %}
+            {% if p == pagination.page %}
+            <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+            {% elif p == 1 or p == pagination.total_pages or (p >= pagination.page - 2 and p <= pagination.page + 2) %}
+            <li class="page-item">
+                <a class="page-link" href="{{ url_for('view_articles', page=p, per_page=pagination.per_page, style=filter_style, podcast=filter_podcast, sort=sort_by, order=sort_order, q=search_query) }}">{{ p }}</a>
+            </li>
+            {% elif p == pagination.page - 3 or p == pagination.page + 3 %}
+            <li class="page-item disabled"><span class="page-link">...</span></li>
+            {% endif %}
+        {% endfor %}
+        
+        <li class="page-item {% if not pagination.has_next %}disabled{% endif %}">
+            <a class="page-link" href="{{ url_for('view_articles', page=pagination.next_page or pagination.total_pages, per_page=pagination.per_page, style=filter_style, podcast=filter_podcast, sort=sort_by, order=sort_order, q=search_query) }}">
+                Next &rsaquo;
+            </a>
+        </li>
+        <li class="page-item {% if not pagination.has_next %}disabled{% endif %}">
+            <a class="page-link" href="{{ url_for('view_articles', page=pagination.total_pages, per_page=pagination.per_page, style=filter_style, podcast=filter_podcast, sort=sort_by, order=sort_order, q=search_query) }}">
+                Last &raquo;
+            </a>
+        </li>
+    </ul>
+</nav>
+{% endif %}
+
+{% else %}
+<div class="empty-state">
+    <div class="empty-state__title">No articles found</div>
+    <div class="empty-state__desc">No articles match your current filters. Process an episode or create one via Compose.</div>
+    <a href="{{ url_for('compose_page') }}" class="btn btn-primary btn-sm">Create Content</a>
+</div>
+{% endif %}
+{% endblock %}

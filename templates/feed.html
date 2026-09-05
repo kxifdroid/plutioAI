@@ -1,0 +1,263 @@
+{% extends "base.html" %}
+{% from 'partials/macros.html' import page_header, status_badge %}
+
+{% block title %}{{ feed.title }} | PlutioAI{% endblock %}
+
+{% block content %}
+<div class="mb-4 pb-2 border-bottom">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('index') }}">&larr; Back to feeds</a>
+        {% if pagination %}<span class="text-muted small">{{ pagination.total_items }} items</span>{% endif %}
+    </div>
+    <h1 style="font-size: 1.5rem; margin-bottom: 0.25rem;">{{ feed.title }}</h1>
+    <span class="micro-label">Feed source</span>
+</div>
+
+{% if episodes %}
+{% if is_text_feed %}
+{# Text/Article Feed Layout #}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 style="font-size: 1.15rem; margin: 0;">Articles</h2>
+</div>
+<div class="row row-cols-1 row-cols-md-2 g-3 mb-4">
+    {% for ep in episodes %}
+    <div class="col">
+        <div class="hairline-card h-100 d-flex flex-column">
+            {% if ep.image %}
+            <img src="{{ ep.image }}" class="card-img-top" alt="{{ ep.title }}" style="max-height: 180px; object-fit: cover; border-bottom: 1px solid var(--border);">
+            {% endif %}
+            <div class="hairline-card__body flex-grow-1">
+                <h3 style="font-size: 1.05rem; margin-bottom: 0.4rem;">{{ ep.title }}</h3>
+                <div class="small text-muted mb-2">
+                    {% if ep.author %}<span>By {{ ep.author }}</span> · {% endif %}
+                    {% if ep.published %}<span>{{ ep.published[:10] }}</span>{% endif %}
+                </div>
+                <p class="small text-secondary mb-3">{{ ep.short_description }}</p>
+                <div class="d-flex gap-1 flex-wrap mb-2">
+                    {% if ep.status.summarized %}<span class="badge bg-success">Summarized</span>{% endif %}
+                    {% if ep.status.actions %}<span class="badge bg-info">Actions Extracted</span>{% endif %}
+                    {% if ep.status.state == 'new' %}<span class="badge bg-secondary">New</span>{% endif %}
+                </div>
+            </div>
+            <div class="card-footer bg-transparent d-flex justify-content-between align-items-center">
+                <a href="{{ ep.link }}" target="_blank" class="btn btn-sm btn-outline-secondary">Read Original</a>
+                <a href="{{ url_for('process_text_article', url=ep.enclosure, title=ep.title, feed_id=feed.id, published=ep.published) }}"
+                   class="btn btn-sm btn-primary" data-processing="true">
+                    {% if ep.status.summarized %}View Results{% else %}Summarize{% endif %}
+                </a>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% elif is_youtube_feed %}
+{# YouTube Video Feed Layout #}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 style="font-size: 1.15rem; margin: 0;">Videos</h2>
+</div>
+<div class="row row-cols-1 row-cols-md-2 g-3 mb-4">
+    {% for ep in episodes %}
+    <div class="col">
+        <div class="hairline-card h-100 d-flex flex-column">
+            {% if ep.video_id %}
+            <div class="ratio ratio-16x9" style="border-bottom: 1px solid var(--border);">
+                <iframe src="https://www.youtube.com/embed/{{ ep.video_id }}" 
+                        title="{{ ep.title }}" frameborder="0" 
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                        allowfullscreen loading="lazy"></iframe>
+            </div>
+            {% elif ep.image %}
+            <img src="{{ ep.image }}" class="card-img-top" alt="{{ ep.title }}" style="max-height: 180px; object-fit: cover; border-bottom: 1px solid var(--border);">
+            {% endif %}
+            <div class="hairline-card__body flex-grow-1">
+                <h3 style="font-size: 1.05rem; margin-bottom: 0.4rem;">{{ ep.title }}</h3>
+                <div class="small text-muted mb-2">
+                    {% if ep.author %}<span>{{ ep.author }}</span> · {% endif %}
+                    {% if ep.published %}<span>{{ ep.published[:10] }}</span>{% endif %}
+                </div>
+                {% if ep.short_description %}
+                <p class="small text-secondary mb-3">{{ ep.short_description }}</p>
+                {% endif %}
+                <div class="d-flex gap-1 flex-wrap mb-2">
+                    {% if ep.status.transcribed %}<span class="badge bg-primary">Transcribed</span>{% endif %}
+                    {% if ep.status.summarized %}<span class="badge bg-success">Summarized</span>{% endif %}
+                    {% if ep.status.actions %}<span class="badge bg-info">Actions</span>{% endif %}
+                    {% if ep.status.state == 'processing' %}<span class="badge bg-warning text-dark">Processing</span>{% endif %}
+                    {% if ep.status.state == 'queued' %}<span class="badge bg-secondary">Queued</span>{% endif %}
+                    {% if ep.status.state == 'error' %}<span class="badge bg-danger">Error</span>{% endif %}
+                    {% if ep.status.state == 'new' %}<span class="badge bg-secondary">New</span>{% endif %}
+                </div>
+            </div>
+            <div class="card-footer bg-transparent">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <a href="{{ ep.link or ep.enclosure }}" target="_blank" class="btn btn-sm btn-outline-secondary">
+                        Watch YouTube
+                    </a>
+                    <div class="btn-group btn-group-sm">
+                        {% if ep.status.transcribed %}
+                        <a href="{{ url_for('process_episode', url=ep.enclosure, title=ep.title, feed_id=feed.id, published=ep.published) }}"
+                           class="btn btn-primary" data-processing="true">View Results</a>
+                        {% else %}
+                        <a href="{{ url_for('enqueue_episode', url=ep.enclosure, title=ep.title, feed_id=feed.id, published=ep.published) }}"
+                           class="btn btn-outline-secondary">Queue</a>
+                        <a href="{{ url_for('process_episode', url=ep.enclosure, title=ep.title, feed_id=feed.id, published=ep.published) }}"
+                           class="btn btn-primary" data-processing="true">Process</a>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="d-flex justify-content-end gap-1">
+                    {% if ep.status.transcribed %}
+                    <a href="{{ url_for('download_transcript_route', url=ep.enclosure, title=ep.title) }}"
+                       class="btn btn-sm btn-outline-secondary" title="Download extracted transcript text">
+                        Transcript (.txt)
+                    </a>
+                    {% endif %}
+                    <a href="{{ url_for('download_audio_route', url=ep.enclosure, title=ep.title) }}"
+                       class="btn btn-sm btn-outline-secondary" title="Download extracted audio MP3">
+                        Audio (.mp3)
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% else %}
+{# Audio Podcast Feed Layout #}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 style="font-size: 1.15rem; margin: 0;">Episodes</h2>
+</div>
+<div class="table-responsive">
+    <table class="table table-hover align-middle">
+        <thead>
+            <tr>
+                <th>Title</th>
+                <th>Released</th>
+                <th>Description</th>
+                <th>Image</th>
+                <th>Play</th>
+                <th>Transcribed</th>
+                <th>Summarized</th>
+                <th>Actions</th>
+                <th>Downloads</th>
+                <th>Status</th>
+                <th class="text-end">Process</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for ep in episodes %}
+            <tr>
+                <td class="fw-medium">{{ ep.title }}</td>
+                <td class="text-nowrap small text-muted">{% if ep.published %}{{ ep.published[:10] }}{% else %}—{% endif %}</td>
+                <td class="description-cell small">
+                    <span class="desc-short">{{ ep.short_description }}</span>
+                    <span class="desc-full d-none">{{ ep.description | safe }}</span>
+                    <button class="btn btn-link p-0 desc-toggle small">See more</button>
+                </td>
+                <td>{% if ep.image %}<img src="{{ ep.image }}" alt="image" width="70" class="rounded border">{% else %}—{% endif %}</td>
+                <td>
+                    <audio controls preload="none" src="{{ ep.enclosure }}" style="height: 32px; width: 180px;">
+                        Your browser does not support the audio element.
+                    </audio>
+                </td>
+                <td>{% if ep.status.transcribed %}<span class="badge bg-success">Yes</span>{% else %}<span class="text-muted">No</span>{% endif %}</td>
+                <td>{% if ep.status.summarized %}<span class="badge bg-success">Yes</span>{% else %}<span class="text-muted">No</span>{% endif %}</td>
+                <td>{% if ep.status.actions %}<span class="badge bg-info">Yes</span>{% else %}<span class="text-muted">No</span>{% endif %}</td>
+                <td>
+                    <div class="btn-group btn-group-sm">
+                        {% if ep.status.transcribed %}
+                        <a href="{{ url_for('download_transcript_route', url=ep.enclosure, title=ep.title) }}" class="btn btn-outline-secondary" title="Download Transcript (.txt)">.txt</a>
+                        {% endif %}
+                        <a href="{{ url_for('download_audio_route', url=ep.enclosure, title=ep.title) }}" class="btn btn-outline-secondary" title="Download Audio (.mp3)">.mp3</a>
+                    </div>
+                </td>
+                <td><span class="badge bg-secondary">{{ ep.status.state }}</span></td>
+                <td class="text-end">
+                    <div class="btn-group btn-group-sm">
+                        <a href="{{ url_for('process_episode', url=ep.enclosure, title=ep.title, feed_id=feed.id, published=ep.published) }}"
+                           class="btn btn-primary" data-processing="true">Process</a>
+                        <a href="{{ url_for('enqueue_episode', url=ep.enclosure, title=ep.title, feed_id=feed.id, published=ep.published) }}"
+                           class="btn btn-outline-secondary">Queue</a>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% else %}
+<div class="alert alert-info">No items found in this feed.</div>
+{% endif %}
+
+{# Pagination Controls #}
+{% if pagination and pagination.total_pages > 1 %}
+<nav aria-label="Feed pagination" class="mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <small class="text-muted">
+            Showing {{ (pagination.page - 1) * pagination.per_page + 1 }}-{{ [pagination.page * pagination.per_page, pagination.total_items] | min }} of {{ pagination.total_items }} items
+        </small>
+        <div class="btn-group btn-group-sm">
+            <a href="{{ url_for('view_feed', feed_id=feed.id, page=pagination.page, per_page=10) }}" 
+               class="btn btn-outline-secondary {% if pagination.per_page == 10 %}active{% endif %}">10</a>
+            <a href="{{ url_for('view_feed', feed_id=feed.id, page=1, per_page=25) }}" 
+               class="btn btn-outline-secondary {% if pagination.per_page == 25 %}active{% endif %}">25</a>
+            <a href="{{ url_for('view_feed', feed_id=feed.id, page=1, per_page=50) }}" 
+               class="btn btn-outline-secondary {% if pagination.per_page == 50 %}active{% endif %}">50</a>
+        </div>
+    </div>
+    <ul class="pagination justify-content-center">
+        <li class="page-item {% if not pagination.has_prev %}disabled{% endif %}">
+            <a class="page-link" href="{{ url_for('view_feed', feed_id=feed.id, page=1, per_page=pagination.per_page) }}">
+                &laquo; First
+            </a>
+        </li>
+        <li class="page-item {% if not pagination.has_prev %}disabled{% endif %}">
+            <a class="page-link" href="{{ url_for('view_feed', feed_id=feed.id, page=pagination.prev_page or 1, per_page=pagination.per_page) }}">
+                &lsaquo; Prev
+            </a>
+        </li>
+        
+        {% for p in range(1, pagination.total_pages + 1) %}
+            {% if p == pagination.page %}
+            <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+            {% elif p == 1 or p == pagination.total_pages or (p >= pagination.page - 2 and p <= pagination.page + 2) %}
+            <li class="page-item">
+                <a class="page-link" href="{{ url_for('view_feed', feed_id=feed.id, page=p, per_page=pagination.per_page) }}">{{ p }}</a>
+            </li>
+            {% elif p == pagination.page - 3 or p == pagination.page + 3 %}
+            <li class="page-item disabled"><span class="page-link">...</span></li>
+            {% endif %}
+        {% endfor %}
+        
+        <li class="page-item {% if not pagination.has_next %}disabled{% endif %}">
+            <a class="page-link" href="{{ url_for('view_feed', feed_id=feed.id, page=pagination.next_page or pagination.total_pages, per_page=pagination.per_page) }}">
+                Next &rsaquo;
+            </a>
+        </li>
+        <li class="page-item {% if not pagination.has_next %}disabled{% endif %}">
+            <a class="page-link" href="{{ url_for('view_feed', feed_id=feed.id, page=pagination.total_pages, per_page=pagination.per_page) }}">
+                Last &raquo;
+            </a>
+        </li>
+    </ul>
+</nav>
+{% endif %}
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('.desc-toggle').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var shortEl = btn.parentElement.querySelector('.desc-short');
+            var fullEl = btn.parentElement.querySelector('.desc-full');
+            shortEl.classList.toggle('d-none');
+            fullEl.classList.toggle('d-none');
+            btn.textContent = btn.textContent.trim() === 'See more' ? 'See less' : 'See more';
+        });
+    });
+});
+</script>
+{% endblock %}

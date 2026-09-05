@@ -1,0 +1,2341 @@
+"""Command line utilities for transcribing and analysing podcasts."""
+
+from __future__ import annotations
+
+import glob
+import json
+import logging
+import os
+import re
+import shlex
+import shutil
+import types
+from typing import List
+from urllib.parse import urlparse, parse_qs
+
+# Which cloud LLM backend to use for text/vision generation: "openai" or "anthropic".
+# Defaults to OpenAI so existing deployments are unaffected. Local generation is
+# selected per-call via ``use_local`` and always uses the Ollama (OpenAI-compatible)
+# path regardless of this setting.
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai").strip().lower()
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_VISION_MODEL = os.environ.get("OLLAMA_VISION_MODEL", "llama3.2-vision")
+OLLAMA_TEXT_MODEL = os.environ.get("OLLAMA_TEXT_MODEL", "llama3.2")
+
+# Selectable models per cloud provider, surfaced in the compose UI's model
+# dropdown. The configured default (OPENAI_MODEL / ANTHROPIC_MODEL) is always
+# offered too, even when it is not listed here. Local (Ollama) models are
+# discovered separately by the browser via the Ollama status endpoint.
+MODEL_CHOICES = {
+    "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"],
+    "anthropic": ["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"],
+}
+
+logger = logging.getLogger(__name__)
+
+
+def _ensure_ffmpeg_on_path() -> None:
+    """Ensure ffmpeg and ffprobe binaries are discoverable on PATH."""
+    if shutil.which("ffmpeg"):
+        return
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    if local_app_data:
+        winget_root = os.path.join(local_app_data, "Microsoft", "WinGet", "Packages")
+        if os.path.exists(winget_root):
+            for root, dirs, files in os.walk(winget_root):
+                if "ffmpeg.exe" in files:
+                    os.environ["PATH"] = root + os.pathsep + os.environ["PATH"]
+                    logger.debug("Found and registered ffmpeg from %s", root)
+                    return
+
+
+_ensure_ffmpeg_on_path()
+
+
+def provider_model_options() -> dict:
+    """Return provider/model options for the compose UI (JSON-serialisable).
+
+    Shape::
+
+        {"default_provider": "openai"|"anthropic",
+         "defaults": {"openai": <model>, "anthropic": <model>, "local": <model>},
+         "models": {"openai": [...], "anthropic": [...]}}
+
+    Each cloud provider's configured default model is kept first in its list so a
+    custom ``OPENAI_MODEL`` / ``ANTHROPIC_MODEL`` is always selectable.
+    """
+    def _with_default(provider: str, default_model: str) -> list:
+        listed = MODEL_CHOICES.get(provider, [])
+        return [default_model] + [m for m in listed if m != default_model]
+
+    return {
+        "default_provider": "anthropic" if LLM_PROVIDER == "anthropic" else "openai",
+        "defaults": {
+            "openai": OPENAI_MODEL,
+            "anthropic": ANTHROPIC_MODEL,
+            "local": OLLAMA_TEXT_MODEL,
+        },
+        "models": {
+            "openai": _with_default("openai", OPENAI_MODEL),
+            "anthropic": _with_default("anthropic", ANTHROPIC_MODEL),
+        },
+    }
+
+# ── Shared constants used by all generation functions ──────────────────────
+
+TONE_GUIDES = {
+    "professional": "Professional and authoritative, suitable for business audiences",
+    "casual": "Casual and conversational, friendly and approachable",
+    "witty": "Witty and clever, with humor where appropriate",
+    "educational": "Educational and informative, focuses on teaching",
+    "promotional": "Promotional and persuasive, drives action",
+}
+
+PLATFORM_GUIDELINES = {
+    "twitter": "280 characters max, punchy and engaging, 3-5 relevant hashtags",
+    "linkedin": "Professional tone, 1-3 paragraphs, thought leadership angle, 3-5 professional hashtags",
+    "facebook": "Conversational, can be longer, engaging question or hook, 2-3 hashtags",
+    "threads": "Casual and authentic, similar to Twitter but can be slightly longer, 3-5 hashtags",
+    "instagram": (
+        "Caption up to 2200 characters. The first line is the hook and must be "
+        "under 125 characters (Instagram truncates the preview). Short paragraphs "
+        "separated by line breaks, emojis welcome. End with 8-15 relevant hashtags "
+        "on their own lines. Links in captions are not clickable, so keep at most "
+        "one short URL and lead with the message, not the link"
+    ),
+}
+
+NO_EM_DASH_RULE = (
+    "Never use em dashes (the long dash) anywhere in the output. "
+    "Use commas, periods, parentheses, or rephrase the sentence instead. "
+    "Do not use en dashes either; only use a normal hyphen when joining words."
+)
+
+# ── Shared LLM helpers ────────────────────────────────────────────────────
+
+def _flatten_text(content) -> str:
+    """Return the plain-text portion of an OpenAI message ``content`` value."""
+    if isinstance(content, str):
+        return content
+    return "\n".join(b.get("text", "") for b in content if b.get("type") == "text")
+
+
+def _anthropic_image_block(url: str) -> dict:
+    """Convert an OpenAI ``image_url`` (data: or http) into an Anthropic image block."""
+    if url.startswith("data:"):
+        # Shape: ``data:<media_type>;base64,<data>``
+        header, _, data = url.partition(",")
+        media_type = header[len("data:"):].split(";")[0] or "image/png"
+        return {"type": "image",
+                "source": {"type": "base64", "media_type": media_type, "data": data}}
+    return {"type": "image", "source": {"type": "url", "url": url}}
+
+
+def _convert_content_for_anthropic(content):
+    """Convert an OpenAI message ``content`` (str or block list) to Anthropic form."""
+    if isinstance(content, str):
+        return content
+    blocks = []
+    for block in content:
+        btype = block.get("type")
+        if btype == "text":
+            blocks.append({"type": "text", "text": block.get("text", "")})
+        elif btype == "image_url":
+            blocks.append(_anthropic_image_block(block.get("image_url", {}).get("url", "")))
+        else:
+            blocks.append(block)  # pass through unknown block types unchanged
+    return blocks
+
+
+class _AnthropicChatClient:
+    """OpenAI-style ``chat.completions.create`` shim over the Anthropic Messages API.
+
+    The two APIs differ in ways this adapter normalises so the existing call sites
+    and usage metering work unchanged:
+
+    * ``system`` role messages become Anthropic's top-level ``system`` parameter.
+    * OpenAI ``image_url`` content blocks become Anthropic ``image`` blocks.
+    * Sampling kwargs (``temperature``, ``top_p``, ``extra_body`` …) are dropped —
+      Claude Opus 4.7+ reject them with a 400.
+    * ``max_tokens`` is required by Anthropic, so a default is supplied when a caller
+      omits it.
+    * The response is wrapped so ``.choices[0].message.content`` and ``.usage``
+      behave like the OpenAI shape the callers read.
+    """
+
+    DEFAULT_MAX_TOKENS = 4096
+
+    def __init__(self, api_key: str | None):
+        if not api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY is not configured")
+        from anthropic import Anthropic
+
+        self._client = Anthropic(api_key=api_key)
+        # Mirror the OpenAI client surface: ``client.chat.completions.create(...)``.
+        self.chat = types.SimpleNamespace(
+            completions=types.SimpleNamespace(create=self._create)
+        )
+
+    def _create(self, *, model, messages, max_tokens=None, **_ignored):
+        system_parts: list[str] = []
+        converted: list[dict] = []
+        for msg in messages:
+            if msg.get("role") == "system":
+                system_parts.append(_flatten_text(msg.get("content", "")))
+                continue
+            converted.append({
+                "role": msg["role"],
+                "content": _convert_content_for_anthropic(msg.get("content", "")),
+            })
+
+        kwargs = {
+            "model": model,
+            "max_tokens": max_tokens or self.DEFAULT_MAX_TOKENS,
+            "messages": converted,
+        }
+        system = "\n\n".join(p for p in system_parts if p)
+        if system:
+            kwargs["system"] = system
+
+        return _AnthropicChatResponse(self._client.messages.create(**kwargs))
+
+
+class _AnthropicChatResponse:
+    """Wrap an Anthropic ``Message`` in the OpenAI response shape callers expect."""
+
+    def __init__(self, message):
+        text = "".join(
+            block.text for block in message.content
+            if getattr(block, "type", None) == "text"
+        )
+        self.choices = [types.SimpleNamespace(message=types.SimpleNamespace(content=text))]
+        self.usage = message.usage  # exposes input_tokens / output_tokens
+        self.model = message.model
+
+
+def _get_llm_client(use_local: bool = False, vision: bool = False,
+                    provider: str | None = None, model: str | None = None):
+    """Return ``(client, model_name, provider)`` for the selected LLM backend.
+
+    ``use_local`` selects a local Ollama server (OpenAI-compatible). ``provider``
+    and ``model`` are optional per-request overrides (e.g. from the compose UI):
+
+    * ``provider`` may be "openai", "anthropic", or "local"/"ollama"; when omitted
+      the cloud backend falls back to ``LLM_PROVIDER``. "local"/"ollama" is
+      equivalent to ``use_local=True``.
+    * ``model`` overrides the model for the resolved provider. A model that does
+      not belong to the resolved cloud provider is ignored (falls back to that
+      provider's default) so a stale UI value can't send e.g. a Claude model to
+      OpenAI and trigger a 400.
+
+    The ``vision`` flag only affects the Ollama model default; the cloud models
+    handle text and vision with a single model.
+    """
+    from openai import OpenAI
+
+    if provider in ("local", "ollama") or (provider is None and LLM_PROVIDER in ("local", "ollama")):
+        use_local = True
+
+    if use_local:
+        m = model or (OLLAMA_VISION_MODEL if vision else OLLAMA_TEXT_MODEL)
+        return OpenAI(base_url=f"{OLLAMA_BASE_URL}/v1", api_key="ollama"), m, "ollama"
+
+    resolved = provider or LLM_PROVIDER
+    if resolved == "anthropic":
+        m = model if (model and model.startswith("claude")) else ANTHROPIC_MODEL
+        return _AnthropicChatClient(os.getenv("ANTHROPIC_API_KEY")), m, "anthropic"
+
+    base_url = os.getenv("OPENAI_BASE_URL")
+    api_key = os.getenv("OPENAI_API_KEY") or "dummy_key"
+    client = OpenAI(base_url=base_url, api_key=api_key) if base_url else OpenAI(api_key=api_key)
+    if not os.getenv("OPENAI_API_KEY") and not base_url:
+        try:
+            ollama_status = check_ollama_status()
+            if ollama_status.get("available"):
+                available_text = ollama_status.get("text_models") or []
+                selected_model = OLLAMA_TEXT_MODEL
+                if available_text and selected_model not in available_text:
+                    selected_model = available_text[0]
+                m = model or (OLLAMA_VISION_MODEL if vision else selected_model)
+                logger.info("Auto-detected local Ollama server running with model %s", m)
+                return OpenAI(base_url=f"{OLLAMA_BASE_URL}/v1", api_key="ollama"), m, "ollama"
+        except Exception:
+            pass
+        raise RuntimeError(
+            "No LLM provider configured. Either set OPENAI_API_KEY, ANTHROPIC_API_KEY, or set LLM_PROVIDER=ollama for local Qwen/Llama models."
+        )
+    m = model if (model and not model.startswith("claude")) else OPENAI_MODEL
+    return client, m, "openai"
+
+
+def _get_llm_params(use_local: bool, num_platforms: int = 1, posts_per_call: int = 1) -> dict:
+    """Return generation kwargs tuned for local vs cloud models."""
+    if use_local:
+        tokens = max(800, 400 * num_platforms * posts_per_call)
+        return {
+            "temperature": 0.3,
+            "max_tokens": min(tokens, 4000),
+            "extra_body": {"repeat_penalty": 1.3, "top_p": 0.9},
+        }
+    return {"temperature": 0.8, "max_tokens": 3000}
+
+
+def _meter(fn_name: str, *args, **kwargs) -> None:
+    """Best-effort usage recording; never raises into generation code.
+
+    Delegates to ``usage_meter.<fn_name>``; any failure (including an import error)
+    is logged at debug level and swallowed so metering can never break generation.
+    """
+    try:
+        import usage_meter
+
+        getattr(usage_meter, fn_name)(*args, **kwargs)
+    except Exception:
+        logger.debug("usage metering unavailable", exc_info=True)
+
+
+_LOCAL_BATCH_SIZE = 1
+
+
+def _build_format_instruction(platforms: list[str], posts_per_platform: int) -> str:
+    """Build the JSON format instruction appended to every LLM prompt."""
+    platform_keys = ", ".join(f'"{p}"' for p in platforms)
+    if posts_per_platform > 1:
+        example_val = '["First post #hashtag", "Second post #hashtag"]'
+    else:
+        example_val = '"Your post text here #hashtag"'
+    json_example = "{" + ", ".join(f'"{p}": {example_val}' for p in platforms) + "}"
+
+    lines = (
+        f"\nReply with ONLY a JSON object. No other text.\n"
+        f"Use ONLY these keys: {platform_keys}\n"
+    )
+    if posts_per_platform > 1:
+        lines += f"Each key maps to an array of {posts_per_platform} post strings.\n"
+    else:
+        lines += "Each key maps to a single post string.\n"
+    lines += f"Example:\n{json_example}"
+    return lines
+
+
+def _batch_generate(client, model, messages_fn, platforms, posts_per_platform,
+                    use_local, provider="openai"):
+    """Generate posts, batching into smaller calls for local models.
+
+    Tracks actual posts received per platform and keeps requesting until the
+    target is met or a safety cap of ``max_attempts`` is reached.
+    """
+    batch_size = _LOCAL_BATCH_SIZE if use_local else posts_per_platform
+
+    def _call(plats, n):
+        params = _get_llm_params(use_local, num_platforms=len(plats), posts_per_call=n)
+        msgs = messages_fn(plats, n)
+        resp = client.chat.completions.create(model=model, messages=msgs, **params)
+        _meter("record_chat", resp, category="social_posts",
+               provider=provider, model=model)
+        return _extract_json_from_llm(resp.choices[0].message.content.strip())
+
+    if posts_per_platform <= batch_size:
+        return _call(platforms, posts_per_platform)
+
+    merged: dict[str, list] = {p: [] for p in platforms}
+    max_attempts = (posts_per_platform // batch_size) * 3
+    attempts = 0
+    while attempts < max_attempts:
+        shortest = min(len(merged[p]) for p in platforms)
+        if shortest >= posts_per_platform:
+            break
+        need = min(batch_size, posts_per_platform - shortest)
+        result = _call(platforms, need)
+        if result:
+            for p in platforms:
+                val = result.get(p, [])
+                if isinstance(val, str):
+                    val = [val]
+                merged[p].extend(val)
+        attempts += 1
+
+    for p in platforms:
+        merged[p] = merged[p][:posts_per_platform]
+    return merged
+
+
+def check_ollama_status() -> dict:
+    """Check if Ollama is running and list available models."""
+    import urllib.request
+    import urllib.error
+
+    _VISION_KW = ("vision", "llava", "moondream", "bakllava")
+
+    result = {
+        "available": False,
+        "models": [],
+        "text_models": [],
+        "configured_model": OLLAMA_VISION_MODEL,
+        "configured_text_model": OLLAMA_TEXT_MODEL,
+    }
+    try:
+        req = urllib.request.Request(f"{OLLAMA_BASE_URL}/api/tags", method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode())
+        all_models = [m["name"] for m in data.get("models", [])]
+        result["models"] = [
+            m for m in all_models
+            if any(kw in m.lower() for kw in _VISION_KW)
+        ]
+        result["text_models"] = [
+            m for m in all_models
+            if not any(kw in m.lower() for kw in _VISION_KW)
+        ]
+        result["available"] = True
+    except Exception:
+        logger.debug("Ollama not reachable at %s", OLLAMA_BASE_URL)
+    return result
+
+
+def configure_logging(verbose: bool = False) -> None:
+    """Configure ``logging`` so debug output can be toggled via ``--verbose``."""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(level=level, format="%(asctime)s [%(levelname)s] %(message)s")
+    # Write a debug message so callers know what level we're using
+    logger.debug("Logging configured. Level=%s", logging.getLevelName(level))
+
+
+# ── YouTube helpers ──────────────────────────────────────────────────────
+
+_YT_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
+
+
+def is_youtube_url(url: str) -> bool:
+    """Return *True* if *url* points to YouTube (video, channel, or playlist)."""
+    try:
+        host = urlparse(url).hostname or ""
+        return host.lower() in _YT_HOSTS
+    except Exception:
+        return False
+
+
+def classify_youtube_url(url: str) -> str:
+    """Classify a YouTube URL as ``'video'``, ``'channel'``, ``'playlist'``, or ``'unknown'``.
+
+    Handles formats like:
+    - ``https://www.youtube.com/watch?v=VIDEO_ID``
+    - ``https://youtu.be/VIDEO_ID``
+    - ``https://www.youtube.com/@handle``
+    - ``https://www.youtube.com/channel/UC...``
+    - ``https://www.youtube.com/c/ChannelName``
+    - ``https://www.youtube.com/playlist?list=PL...``
+    """
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.rstrip("/")
+    qs = parse_qs(parsed.query)
+
+    if host == "youtu.be":
+        return "video"
+
+    if "list" in qs and path in ("/playlist", ""):
+        return "playlist"
+    if "v" in qs or path.startswith("/shorts/"):
+        return "video"
+    if path.startswith("/@") or path.startswith("/channel/") or path.startswith("/c/"):
+        return "channel"
+    if "list" in qs:
+        return "playlist"
+
+    return "unknown"
+
+
+def _resolve_channel_id(url: str) -> str | None:
+    """Use yt-dlp to resolve a channel/handle URL to a channel ID."""
+    try:
+        import yt_dlp
+
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": True,
+            "playlist_items": "1",
+        }
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            return info.get("channel_id") or info.get("id")
+    except Exception as exc:
+        logger.warning("Could not resolve channel ID for %s: %s", url, exc)
+        return None
+
+
+def youtube_url_to_rss(url: str) -> str | None:
+    """Convert a YouTube channel or playlist URL to its Atom RSS feed URL.
+
+    Returns *None* when the URL cannot be converted (e.g. a single video).
+    """
+    kind = classify_youtube_url(url)
+    parsed = urlparse(url)
+    qs = parse_qs(parsed.query)
+
+    if kind == "playlist":
+        playlist_id = qs.get("list", [None])[0]
+        if playlist_id:
+            return f"https://www.youtube.com/feeds/videos.xml?playlist_id={playlist_id}"
+        return None
+
+    if kind == "channel":
+        path = parsed.path.rstrip("/")
+        if path.startswith("/channel/"):
+            channel_id = path.split("/channel/")[1].split("/")[0]
+        else:
+            channel_id = _resolve_channel_id(url)
+        if channel_id:
+            return f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+        return None
+
+    return None
+
+
+def get_youtube_video_id(url: str) -> str | None:
+    """Extract the video ID from a YouTube video URL."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    qs = parse_qs(parsed.query)
+
+    if host == "youtu.be":
+        return parsed.path.lstrip("/").split("/")[0] or None
+
+    vid = qs.get("v", [None])[0]
+    if vid:
+        return vid
+
+    path = parsed.path
+    if path.startswith("/shorts/"):
+        return path.split("/shorts/")[1].split("/")[0] or None
+
+    return None
+
+
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+DOWNLOADS_DIR = os.path.join(_APP_DIR, "downloads")
+
+
+def _format_transcript_items(items) -> str:
+    from html import unescape
+    lines = []
+    for item in items:
+        if isinstance(item, dict):
+            text = item.get("text", "")
+        else:
+            text = getattr(item, "text", "")
+        text = unescape(str(text or "")).strip()
+        if text and text != "\n":
+            lines.append(text)
+    full_text = " ".join(lines).strip()
+    full_text = re.sub(r"\s+", " ", full_text)
+    return full_text
+
+
+def get_youtube_video_captions(video_url: str) -> str | None:
+    """Extract transcript directly from YouTube captions/subtitles without audio download.
+
+    Tries:
+    1. youtube_transcript_api with direct English tracks or auto-translated to English.
+    2. yt-dlp subtitle & automatic_captions tracks with English prioritization and &tlang=en auto-translation.
+
+    Returns the full caption text if available, or None if captions are not available.
+    """
+    from html import unescape
+    video_id = get_youtube_video_id(video_url)
+
+    # 1. Try youtube_transcript_api (fastest, typically ~0.5s, with full auto-translate support)
+    if video_id:
+        try:
+            from youtube_transcript_api import YouTubeTranscriptApi
+            ytt = YouTubeTranscriptApi()
+            transcript_list = ytt.list(video_id)
+
+            # Direct English track (manual or auto-generated)
+            try:
+                t = transcript_list.find_transcript(
+                    ["en", "en-US", "en-GB", "en-CA", "en-AU", "en-IN", "en-orig", "en-IE", "en-NZ", "en-ZA"]
+                )
+                data = t.fetch()
+                text = _format_transcript_items(data)
+                if len(text.split()) >= 5:
+                    logger.info("Retrieved direct English transcript via youtube_transcript_api (%d chars)", len(text))
+                    return text
+            except Exception:
+                pass
+
+            # Auto-translate any available track to English
+            for t in transcript_list:
+                if t.is_translatable:
+                    try:
+                        data = t.translate("en").fetch()
+                        text = _format_transcript_items(data)
+                        if len(text.split()) >= 5:
+                            logger.info("Retrieved auto-translated English transcript from %s via youtube_transcript_api (%d chars)", t.language_code, len(text))
+                            return text
+                    except Exception:
+                        continue
+        except Exception as exc:
+            logger.debug("youtube_transcript_api extraction failed for %s: %s", video_url, exc)
+
+    # 2. Try yt-dlp info extraction + auto-translate URL parameter
+    try:
+        import yt_dlp
+        import requests
+
+        opts = {
+            "skip_download": True,
+            "quiet": True,
+            "no_warnings": True,
+            "nocheckcertificate": True,
+        }
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+
+        subs = info.get("subtitles") or {}
+        auto_subs = info.get("automatic_captions") or {}
+
+        all_tracks = {}
+        for k, v in auto_subs.items():
+            all_tracks[k] = v
+        for k, v in subs.items():
+            all_tracks[k] = v
+
+        if all_tracks:
+            target_lang = next(
+                (lang for lang in ["en", "en-US", "en-GB", "en-CA", "en-AU", "en-IN", "en-orig"] if lang in all_tracks),
+                None,
+            )
+            is_auto_translate = False
+            if not target_lang:
+                target_lang = next((lang for lang in all_tracks if lang.startswith("en")), None)
+            if not target_lang:
+                target_lang = list(all_tracks.keys())[0]
+                is_auto_translate = True
+
+            formats = all_tracks.get(target_lang)
+            if formats:
+                selected = next((f for f in formats if f.get("ext") == "json3"), None)
+                if not selected:
+                    selected = next((f for f in formats if f.get("ext") in ("vtt", "srv1", "ttml", "srv3")), None) or formats[0]
+
+                sub_url = selected.get("url")
+                if sub_url:
+                    if is_auto_translate and "tlang=" not in sub_url:
+                        sub_url += "&tlang=en"
+
+                    resp = requests.get(sub_url, timeout=12)
+                    if resp.status_code == 200:
+                        if selected.get("ext") == "json3" or "json3" in sub_url or resp.headers.get("content-type", "").startswith("application/json"):
+                            try:
+                                data = resp.json()
+                                lines = []
+                                for event in data.get("events", []):
+                                    segs = event.get("segs", [])
+                                    seg_text = "".join(s.get("utf8", "") for s in segs if isinstance(s, dict)).strip()
+                                    if seg_text and seg_text != "\n":
+                                        lines.append(unescape(seg_text))
+                                full_text = " ".join(lines).strip()
+                                full_text = re.sub(r"\s+", " ", full_text)
+                                if len(full_text.split()) >= 5:
+                                    logger.info("Retrieved transcript via yt-dlp captions (%d chars)", len(full_text))
+                                    return full_text
+                            except Exception:
+                                pass
+
+                        raw_text = resp.text
+                        cleaned = re.sub(r"<[^>]+>", " ", raw_text)
+                        cleaned = re.sub(r"\d{1,2}:\d{2}:\d{2}[\.,]\d{3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[\.,]\d{3}", " ", cleaned)
+                        cleaned = re.sub(r"\d{1,2}:\d{2}[\.,]\d{3}\s*-->\s*\d{1,2}:\d{2}[\.,]\d{3}", " ", cleaned)
+                        lines = [line.strip() for line in cleaned.splitlines() if line.strip() and not line.strip().isdigit()]
+                        result = unescape(" ".join(lines)).strip()
+                        result = re.sub(r"\s+", " ", result)
+                        if len(result.split()) >= 5:
+                            logger.info("Retrieved transcript via yt-dlp text captions (%d chars)", len(result))
+                            return result
+
+    except Exception as exc:
+        logger.debug("yt-dlp caption extraction failed for %s: %s", video_url, exc)
+
+    return None
+
+
+def get_youtube_transcript(video_url: str, output_dir: str | None = None, keep_audio: bool = True) -> tuple[str, str]:
+    """Extract YouTube transcript, prioritizing captions first, falling back to audio extraction.
+
+    Returns ``(transcript, method)`` where ``method`` is ``"captions"`` or ``"audio_whisper"``.
+    """
+    logger.info("Checking for captions on YouTube video: %s", video_url)
+    captions = get_youtube_video_captions(video_url)
+    if captions:
+        logger.info("Extracted transcript directly from YouTube captions (%d chars)", len(captions))
+        return captions, "captions"
+
+    logger.info("No captions available for %s. Falling back to audio extraction via yt-dlp", video_url)
+    audio_path = download_youtube_audio(video_url, output_dir=output_dir)
+    try:
+        transcript = transcribe_audio(audio_path)
+        return transcript, "audio_whisper"
+    finally:
+        if audio_path and os.path.exists(audio_path) and not keep_audio:
+            try:
+                os.remove(audio_path)
+            except OSError:
+                pass
+
+
+def ensure_audio_file(url: str, output_dir: str | None = None) -> str:
+    """Ensure an audio file exists locally for a YouTube URL or podcast audio URL and return its filepath.
+
+    If already downloaded into output_dir (or DOWNLOADS_DIR), returns existing path.
+    Otherwise downloads and caches it.
+    """
+    if output_dir is None:
+        output_dir = DOWNLOADS_DIR
+    os.makedirs(output_dir, exist_ok=True)
+
+    if is_youtube_url(url):
+        video_id = get_youtube_video_id(url)
+        if video_id:
+            for ext in ("mp3", "m4a", "webm", "wav", "mp4", "aac", "ogg", "opus"):
+                expected_path = os.path.join(output_dir, f"{video_id}.{ext}")
+                if os.path.exists(expected_path) and os.path.getsize(expected_path) > 0:
+                    return expected_path
+        return download_youtube_audio(url, output_dir=output_dir)
+    else:
+        import hashlib
+        url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()[:12]
+        parsed = urlparse(url)
+        base_name = os.path.basename(parsed.path) or "audio.mp3"
+        clean_name = re.sub(r'[^A-Za-z0-9_.-]', '_', base_name)
+        if not clean_name.lower().endswith(('.mp3', '.m4a', '.wav', '.ogg', '.aac', '.mp4', '.webm')):
+            clean_name += '.mp3'
+        cached_path = os.path.join(output_dir, f"{url_hash}_{clean_name}")
+        if os.path.exists(cached_path) and os.path.getsize(cached_path) > 0:
+            return cached_path
+
+        with requests.get(url, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            with open(cached_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=16384):
+                    f.write(chunk)
+        return cached_path
+
+
+def download_youtube_audio(video_url: str, output_dir: str | None = None) -> str:
+    """Download audio from a YouTube video using yt-dlp.
+
+    Files are saved into *output_dir* (defaults to ``downloads/`` inside the
+    application directory). Returns the path to the downloaded audio file.
+    Supports systems both with and without ffmpeg installed.
+    """
+    try:
+        import yt_dlp
+    except ImportError:
+        raise RuntimeError(
+            "yt-dlp is required for YouTube support. Install with: pip install yt-dlp"
+        )
+
+    if output_dir is None:
+        output_dir = DOWNLOADS_DIR
+    os.makedirs(output_dir, exist_ok=True)
+
+    has_ffmpeg = bool(shutil.which("ffmpeg"))
+    output_template = os.path.join(output_dir, "%(id)s.%(ext)s")
+
+    opts = {
+        "format": "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
+        "outtmpl": output_template,
+        "quiet": True,
+        "no_warnings": True,
+        "nocheckcertificate": True,
+        "concurrent_fragment_downloads": 4,
+    }
+    if has_ffmpeg:
+        opts["postprocessors"] = [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "128",
+            }
+        ]
+
+    logger.info("Downloading audio from YouTube: %s (ffmpeg=%s)", video_url, has_ffmpeg)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(video_url, download=True)
+
+    video_id = info.get("id", "audio")
+
+    # Check for expected mp3 or other audio formats
+    for ext in ("mp3", "m4a", "webm", "wav", "mp4", "aac", "ogg", "opus"):
+        expected_path = os.path.join(output_dir, f"{video_id}.{ext}")
+        if os.path.exists(expected_path):
+            logger.info("YouTube audio saved to %s", expected_path)
+            return expected_path
+
+    audio_files = glob.glob(os.path.join(output_dir, f"{video_id}.*"))
+    audio_files = [f for f in audio_files if not f.endswith((".json", ".txt", ".part", ".ytdl"))]
+    if audio_files:
+        return audio_files[0]
+
+    all_audios = glob.glob(os.path.join(output_dir, "*.*"))
+    all_audios = [f for f in all_audios if not f.endswith((".json", ".txt", ".part", ".ytdl"))]
+    if all_audios:
+        return all_audios[0]
+
+    raise FileNotFoundError(
+        f"yt-dlp did not produce an audio file for {video_url}"
+    )
+
+
+def transcribe_audio(audio_path: str) -> str:
+    """Transcribe an audio file using local mlx-whisper, faster-whisper, or OpenAI API.
+
+    Parameters
+    ----------
+    audio_path: str
+        Path to the audio file.
+
+    Returns
+    -------
+    str
+        The transcribed text.
+    """
+    logger.debug("Starting transcription of %s", audio_path)
+    
+    # Try mlx-whisper first (optimized for Apple Silicon, free & local)
+    try:
+        import mlx_whisper
+        logger.info("Using mlx-whisper for transcription (Apple Silicon optimized)")
+        result = mlx_whisper.transcribe(
+            audio_path,
+            path_or_hf_repo="mlx-community/whisper-base-mlx",
+        )
+        transcript = result.get("text", "").strip()
+        _meter("record_transcription", audio_path=audio_path,
+               transcript=transcript, provider="local", model="whisper-base-mlx")
+        logger.debug("Transcription complete via mlx-whisper")
+        return transcript
+    except ImportError:
+        logger.debug("mlx-whisper not available, trying alternatives")
+    except Exception as exc:
+        logger.warning("mlx-whisper failed: %s, trying alternatives", exc)
+    
+    # Try faster-whisper next (works on Linux/Windows/older Macs)
+    try:
+        from faster_whisper import WhisperModel
+        whisper_model_name = os.environ.get("WHISPER_MODEL", "base")
+        logger.info("Using faster-whisper for transcription (model=%s)", whisper_model_name)
+        model = WhisperModel(whisper_model_name, device="cpu", compute_type="int8")
+        segments, _ = model.transcribe(audio_path)
+        segments_list = list(segments)
+        transcript = " ".join(segment.text.strip() for segment in segments_list)
+        _meter("record_transcription", audio_path=audio_path,
+               transcript=transcript, provider="local", model=f"faster-whisper-{whisper_model_name}")
+        logger.debug("Transcription finished with %d segments", len(segments_list))
+        return transcript
+    except ImportError:
+        logger.debug("faster-whisper not available, trying OpenAI API")
+    except Exception as exc:
+        logger.warning("faster-whisper failed: %s, trying OpenAI API", exc)
+    
+    # Fall back to OpenAI Whisper API (costs money but always works)
+    if os.getenv("OPENAI_API_KEY"):
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            
+            logger.info("Using OpenAI Whisper API for transcription")
+            with open(audio_path, "rb") as audio_file:
+                response = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                )
+            transcript = response.text.strip()
+            _meter("record_transcription", audio_path=audio_path,
+                   transcript=transcript, provider="openai", model="whisper-1")
+            logger.debug("Transcription complete via OpenAI API")
+            return transcript
+        except Exception as exc:
+            logger.exception("OpenAI Whisper API failed: %s", exc)
+    
+    raise NotImplementedError(
+        "Audio transcription requires one of:\n"
+        "1. mlx-whisper (pip install mlx-whisper) - Best for Apple Silicon Macs\n"
+        "2. faster-whisper (pip install faster-whisper) - For other systems\n"
+        "3. OPENAI_API_KEY environment variable set (uses paid API)"
+    )
+
+
+def summarize_text(text: str) -> str:
+    """Summarize ``text`` using the configured LLM provider."""
+
+    try:
+        client, model, provider = _get_llm_client()
+
+        logger.debug("Requesting summary from %s", provider)
+        # Ask the language model for a short summary of the transcript
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": f"Summarize the following text. {NO_EM_DASH_RULE}\n\n{text}"}],
+            temperature=0.2,
+        )
+        summary = response.choices[0].message.content.strip()
+        _meter("record_chat", response, category="summary",
+               provider=provider, model=model)
+        logger.debug("Summary received")
+        return summary
+    except Exception as exc:
+        logger.exception("LLM summarization failed")
+        raise RuntimeError("Failed to summarize text") from exc
+
+
+def extract_action_items(text: str) -> List[str]:
+    """Extract action items from ``text`` using the configured LLM provider."""
+
+    try:
+        # Similar to ``summarize_text`` but asking for a bullet list of tasks
+        client, model, provider = _get_llm_client()
+
+        logger.debug("Requesting action items from %s", provider)
+        # Ask the language model for a plain list of actions without extra text
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "Extract a concise list of action items from the "
+                        "following text. Respond with one item per line "
+                        "and no additional commentary. " + NO_EM_DASH_RULE + "\n" + text
+                    ),
+                }
+            ],
+            temperature=0.2,
+        )
+        # Normalise each returned line into a bare task string
+        lines = response.choices[0].message.content.splitlines()
+        actions = [ln.lstrip("- ").strip() for ln in lines if ln.strip()]
+        _meter("record_chat", response, category="action_items",
+               provider=provider, model=model)
+        logger.debug("Action items received: %d", len(actions))
+        return actions
+    except Exception as exc:
+        logger.exception("LLM action item extraction failed")
+        raise RuntimeError("Failed to extract action items") from exc
+
+
+def generate_article(
+    transcript: str,
+    summary: str,
+    topic: str,
+    podcast_title: str,
+    episode_title: str,
+    style: str = "blog",
+    extra_context: str | None = None,
+    is_text_source: bool = False,
+) -> str:
+    """Generate an article about a specific topic based on podcast or article content.
+
+    Parameters
+    ----------
+    transcript: str
+        The full podcast transcript or article content.
+    summary: str
+        A summary of the episode or article.
+    topic: str
+        The specific topic or angle the user wants the article to focus on.
+    podcast_title: str
+        The name of the podcast or publication for attribution.
+    episode_title: str
+        The title of the specific episode or article.
+    style: str
+        The article style (blog, news, opinion, technical). Defaults to blog.
+    extra_context: str | None
+        Optional additional context or instructions from the user.
+    is_text_source: bool
+        True if the source is a text article, False if it's a podcast.
+
+    Returns
+    -------
+    str
+        The generated article in markdown format.
+    """
+    try:
+        client, model, provider = _get_llm_client()
+
+        style_guides = {
+            "blog": "Write in an engaging, conversational blog style with a personal voice.",
+            "news": "Write in a professional news article style, factual and objective.",
+            "opinion": "Write as an opinion/editorial piece with clear perspective and analysis.",
+            "technical": "Write as a technical deep-dive with detailed explanations for practitioners.",
+        }
+        style_instruction = style_guides.get(style, style_guides["blog"])
+
+        # Build extra context section if provided
+        extra_context_section = ""
+        if extra_context:
+            extra_context_section = (
+                f"\nADDITIONAL CONTEXT FROM THE AUTHOR:\n{extra_context}\n\n"
+                "Please incorporate the above context, insights, or instructions into the article.\n"
+            )
+
+        # Adapt prompts based on source type
+        if is_text_source:
+            source_type = "article"
+            source_label = "SOURCE PUBLICATION"
+            content_label = "ARTICLE"
+            full_content_label = "FULL ARTICLE CONTENT"
+            credit_instruction = (
+                "6. IMPORTANT: At the end of the article, include a section titled "
+                "'## Read the Original Article' that credits the source publication by name, "
+                "mentions the specific article title, and encourages readers to check out "
+                "the original piece and the publication for more great journalism. Make this feel "
+                "genuine and appreciative, not like a generic disclaimer."
+            )
+        else:
+            source_type = "podcast"
+            source_label = "SOURCE PODCAST"
+            content_label = "EPISODE"
+            full_content_label = "FULL TRANSCRIPT"
+            credit_instruction = (
+                "6. IMPORTANT: At the end of the article, include a section titled "
+                "'## Listen to the Full Episode' that credits the source podcast by name, "
+                "mentions the specific episode title, and encourages readers to check out "
+                "the podcast for the full discussion and more great content. Make this feel "
+                "genuine and enthusiastic, not like a generic disclaimer."
+            )
+
+        logger.debug("Generating article about: %s", topic)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an expert tech writer specializing in cybersecurity, privacy, "
+                        "and technology topics. You write compelling, well-researched articles "
+                        "that inform and engage readers. Use markdown formatting for the article "
+                        "with proper headings, paragraphs, and emphasis where appropriate. "
+                        + NO_EM_DASH_RULE
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Based on the following {source_type} content, write an article focused on: {topic}\n\n"
+                        f"Style: {style_instruction}\n\n"
+                        f"{source_label}: {podcast_title}\n"
+                        f"{content_label}: {episode_title}\n\n"
+                        f"{extra_context_section}"
+                        f"SUMMARY:\n{summary}\n\n"
+                        f"{full_content_label}:\n{transcript[:15000]}\n\n"  # Limit to avoid token limits
+                        "Write a compelling article (800-1500 words) that:\n"
+                        "1. Has an attention-grabbing headline\n"
+                        "2. Provides valuable insights on the topic\n"
+                        f"3. References specific points from the {source_type}\n"
+                        "4. Includes a strong conclusion with takeaways\n"
+                        "5. Is suitable for a tech/security focused audience\n"
+                        f"{credit_instruction}"
+                    ),
+                },
+            ],
+            temperature=0.7,
+            max_tokens=4000,
+        )
+        article = response.choices[0].message.content.strip()
+        _meter("record_chat", response, category="article",
+               provider=provider, model=model)
+        logger.debug("Article generated successfully")
+        return article
+    except Exception as exc:
+        logger.exception("Article generation failed")
+        raise RuntimeError("Failed to generate article") from exc
+
+
+def generate_social_copy(
+    article_content: str,
+    article_topic: str,
+    platforms: List[str] | None = None,
+    posts_per_platform: int = 10,
+    extra_context: str | None = None,
+) -> dict:
+    """Generate social media promotional copy with hashtags for different platforms.
+
+    Parameters
+    ----------
+    article_content: str
+        The article content to promote.
+    article_topic: str
+        The main topic/title of the article.
+    platforms: List[str] | None
+        List of platforms to generate copy for. Defaults to all major platforms.
+    posts_per_platform: int
+        Number of unique posts to generate per platform. Defaults to 1.
+    extra_context: str | None
+        Optional additional context or instructions for generating posts.
+
+    Returns
+    -------
+    dict
+        Dictionary with platform names as keys. Values are lists of posts if 
+        posts_per_platform > 1, otherwise single strings for backward compatibility.
+    """
+    if platforms is None:
+        platforms = ["twitter", "linkedin", "facebook", "threads"]
+    
+    # Clamp posts_per_platform to reasonable range
+    posts_per_platform = max(1, min(posts_per_platform, 21))
+
+    try:
+        client, model, provider = _get_llm_client()
+
+        platform_guidelines = {
+            "twitter": "280 characters max, punchy and engaging, 3-5 relevant hashtags",
+            "linkedin": "Professional tone, 1-3 paragraphs, thought leadership angle, 3-5 professional hashtags",
+            "facebook": "Conversational, can be longer, engaging question or hook, 2-3 hashtags",
+            "threads": "Casual and authentic, similar to Twitter but can be slightly longer, 3-5 hashtags",
+            "instagram": (
+        "Caption up to 2200 characters. The first line is the hook and must be "
+        "under 125 characters (Instagram truncates the preview). Short paragraphs "
+        "separated by line breaks, emojis welcome. End with 8-15 relevant hashtags "
+        "on their own lines. Links in captions are not clickable, so keep at most "
+        "one short URL and lead with the message, not the link"
+    ),
+        }
+
+        platform_list = "\n".join([
+            f"- {p.upper()}: {platform_guidelines.get(p, 'Standard social media post with hashtags')}"
+            for p in platforms
+        ])
+
+        # Build the multi-post instruction
+        if posts_per_platform > 1:
+            multi_post_instruction = (
+                f"\nIMPORTANT: Generate {posts_per_platform} UNIQUE and DIFFERENT posts for EACH platform. "
+                "Each post should have a distinct angle, hook, or approach - suitable for posting on different days. "
+                "Vary the tone, focus, and call-to-action between posts. "
+                f"Return an array of {posts_per_platform} posts for each platform.\n\n"
+                "Format your response as JSON with platform names as keys and ARRAYS of posts as values. Example:\n"
+                '{"twitter": ["First tweet here #hashtag", "Second tweet here #tech"], '
+                '"linkedin": ["First LinkedIn post...", "Second LinkedIn post..."]}'
+            )
+        else:
+            multi_post_instruction = (
+                "\n\nFormat your response as JSON with platform names as keys. Example:\n"
+                '{"twitter": "Your tweet here #hashtag", "linkedin": "Your LinkedIn post here"}'
+            )
+
+        logger.debug("Generating %d social media post(s) per platform for: %s", posts_per_platform, article_topic)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a social media marketing expert specializing in tech and cybersecurity content. "
+                        "You create engaging, platform-optimized promotional copy that drives engagement and clicks. "
+                        "You understand each platform's unique culture and best practices. "
+                        "When asked to create multiple posts, you ensure each one is genuinely unique with different "
+                        "angles, hooks, questions, or perspectives - not just rewording the same message. "
+                        + NO_EM_DASH_RULE
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Generate promotional social media copy for the following article:\n\n"
+                        f"TOPIC: {article_topic}\n\n"
+                        f"ARTICLE EXCERPT:\n{article_content[:3000]}\n\n"
+                        + (f"ADDITIONAL CONTEXT/INSTRUCTIONS:\n{extra_context}\n\n" if extra_context else "")
+                        + f"Create platform-specific promotional posts for each of these platforms:\n{platform_list}\n\n"
+                        "For each post:\n"
+                        "1. Write copy optimized for that platform's audience and format\n"
+                        "2. Include relevant hashtags (tech, cybersecurity, privacy focused)\n"
+                        "3. Include a call-to-action or hook\n"
+                        "4. Make it shareable and engaging\n"
+                        f"{multi_post_instruction}"
+                    ),
+                },
+            ],
+            temperature=0.8,  # Slightly higher for more variety in multiple posts
+            max_tokens=3000 if posts_per_platform > 1 else 2000,
+        )
+        _meter("record_chat", response, category="social_posts",
+               provider=provider, model=model)
+
+        # Parse the JSON response
+        content = response.choices[0].message.content.strip()
+        # Handle markdown code blocks if present
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+            content = content.strip()
+        
+        result = json.loads(content)
+        logger.debug("Social media copy generated for %d platforms", len(result))
+        return result
+    except json.JSONDecodeError as exc:
+        logger.warning("Failed to parse JSON response, returning raw content")
+        return {"raw": response.choices[0].message.content.strip()}
+    except Exception as exc:
+        logger.exception("Social media copy generation failed")
+        raise RuntimeError("Failed to generate social media copy") from exc
+
+
+def refine_article(
+    current_content: str,
+    user_feedback: str,
+    article_topic: str,
+) -> str:
+    """Refine an article based on user feedback using AI.
+
+    Parameters
+    ----------
+    current_content: str
+        The current article content in markdown.
+    user_feedback: str
+        User's instructions for how to modify the article.
+    article_topic: str
+        The article's topic for context.
+
+    Returns
+    -------
+    str
+        The refined article content in markdown.
+    """
+    try:
+        client, model, provider = _get_llm_client()
+
+        logger.debug("Refining article based on feedback: %s", user_feedback[:100])
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an expert editor specializing in tech and cybersecurity content. "
+                        "You help refine and improve articles based on user feedback while maintaining "
+                        "the article's voice, structure, and key points. Return the complete revised "
+                        "article in markdown format. "
+                        + NO_EM_DASH_RULE
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Please revise the following article based on my feedback.\n\n"
+                        f"ARTICLE TOPIC: {article_topic}\n\n"
+                        f"CURRENT ARTICLE:\n{current_content}\n\n"
+                        f"MY FEEDBACK/INSTRUCTIONS:\n{user_feedback}\n\n"
+                        "Please apply my feedback and return the complete revised article in markdown format. "
+                        "Maintain the overall structure unless I specifically asked to change it. "
+                        "Keep the same tone and style unless instructed otherwise."
+                    ),
+                },
+            ],
+            temperature=0.7,
+            max_tokens=4000,
+        )
+        _meter("record_chat", response, category="refine",
+               provider=provider, model=model)
+        refined = response.choices[0].message.content.strip()
+        logger.debug("Article refined successfully")
+        return refined
+    except Exception as exc:
+        logger.exception("Article refinement failed")
+        raise RuntimeError("Failed to refine article") from exc
+
+
+def generate_posts_from_prompt(
+    prompt: str,
+    platforms: List[str] | None = None,
+    tone: str = "professional",
+    posts_per_platform: int = 10,
+    extra_context: str | None = None,
+    use_local: bool = False,
+    provider: str | None = None,
+    model: str | None = None,
+) -> dict:
+    """Generate social media posts from a freeform prompt/topic."""
+    if platforms is None:
+        platforms = ["linkedin", "threads", "twitter"]
+
+    posts_per_platform = max(1, min(posts_per_platform, 10))
+
+    try:
+        client, model, provider = _get_llm_client(use_local, provider=provider, model=model)
+        tone_instruction = TONE_GUIDES.get(tone, TONE_GUIDES["professional"])
+
+        platform_list = "\n".join([
+            f"- {p.upper()}: {PLATFORM_GUIDELINES.get(p, 'Standard social media post with hashtags')}"
+            for p in platforms
+        ])
+
+        def _messages(plats, n):
+            return [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a social media content creator and marketing expert. "
+                        "You create engaging, platform-optimized posts that resonate with audiences. "
+                        + NO_EM_DASH_RULE + " "
+                        "You ALWAYS reply with valid JSON only."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Create social media posts about the following topic/prompt:\n\n"
+                        f"TOPIC/PROMPT: {prompt}\n\n"
+                        f"TONE: {tone_instruction}\n\n"
+                        + (f"ADDITIONAL CONTEXT:\n{extra_context}\n\n" if extra_context else "")
+                        + f"Create posts for these platforms:\n{platform_list}\n\n"
+                        "For each post:\n"
+                        "1. Optimize for the platform's audience and format\n"
+                        "2. Include relevant hashtags\n"
+                        "3. Make it engaging and shareable\n"
+                        "4. Stay on topic and provide value\n"
+                        + _build_format_instruction(plats, n)
+                    ),
+                },
+            ]
+
+        logger.debug("Generating posts from prompt via %s: %s",
+                      "Ollama" if use_local else "OpenAI", prompt[:100])
+        result = _batch_generate(client, model, _messages, platforms,
+                                 posts_per_platform, use_local, provider)
+        if result:
+            logger.debug("Generated posts for %d platforms from prompt", len(result))
+            return result
+
+        logger.warning("Could not extract JSON from prompt generation")
+        return {p: "" for p in platforms}
+    except Exception as exc:
+        logger.exception("Post generation from prompt failed")
+        raise RuntimeError("Failed to generate posts from prompt") from exc
+
+
+def generate_posts_from_url(
+    url: str,
+    platforms: List[str] | None = None,
+    tone: str = "professional",
+    posts_per_platform: int = 10,
+    extra_context: str | None = None,
+    use_local: bool = False,
+    provider: str | None = None,
+    model: str | None = None,
+) -> dict:
+    """Generate social media posts based on content from a URL."""
+    import re
+    import trafilatura
+
+    if platforms is None:
+        platforms = ["linkedin", "threads", "twitter"]
+
+    # ── Fetch the URL content ──────────────────────────────────────────
+    import requests
+    from bs4 import BeautifulSoup
+
+    title = ""
+    description = ""
+    body_content = ""
+    og_image = None
+
+    try:
+        # 1. YouTube URLs
+        if is_youtube_url(url):
+            video_id = get_youtube_video_id(url)
+            try:
+                meta = fetch_youtube_metadata(url)
+                title = meta.get("title") or url
+                description = meta.get("description") or ""
+                og_image = meta.get("thumbnail")
+            except Exception:
+                title = url
+            if not og_image and video_id:
+                og_image = f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg"
+
+            try:
+                transcript, method = get_youtube_transcript(url)
+                body_content = transcript or description
+                logger.info("Extracted YouTube content via %s (%d chars)", method, len(body_content))
+            except Exception as exc:
+                logger.warning("YouTube transcript extraction failed for %s: %s", url, exc)
+                body_content = description
+
+        # 2. GitHub Repository URLs
+        elif "github.com" in url:
+            try:
+                from github_client import is_github_repo_url, parse_github_repo_url, fetch_github_repo
+                if is_github_repo_url(url):
+                    owner, repo_name = parse_github_repo_url(url)
+                    repo_data = fetch_github_repo(owner, repo_name)
+                    title = repo_data.get("title") or url
+                    description = repo_data.get("description") or ""
+                    body_content = repo_data.get("content") or ""
+                    og_image = repo_data.get("og_image")
+            except Exception as exc:
+                logger.warning("GitHub repo ingestion failed for %s: %s", url, exc)
+
+        # 3. Standard Web URLs
+        if not body_content and not is_youtube_url(url):
+            try:
+                downloaded = trafilatura.fetch_url(url)
+                if downloaded:
+                    body_content = trafilatura.extract(
+                        downloaded,
+                        include_comments=False,
+                        include_tables=True,
+                        favor_precision=True,
+                    ) or ""
+                    metadata = trafilatura.extract_metadata(downloaded)
+                    if metadata:
+                        title = title or metadata.title or ""
+                        description = description or metadata.description or ""
+                        og_image = og_image or metadata.image
+            except Exception as exc:
+                logger.debug("Trafilatura fetch failed for %s: %s", url, exc)
+
+            # Fallback with requests + BeautifulSoup if trafilatura had no body
+            if not body_content:
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                }
+                resp = requests.get(url, headers=headers, timeout=15)
+                resp.raise_for_status()
+                soup = BeautifulSoup(resp.content, "html.parser")
+                if not title:
+                    title_tag = soup.find("title") or soup.find("meta", property="og:title")
+                    title = title_tag.get_text().strip() if title_tag else url
+                if not description:
+                    desc_tag = soup.find("meta", attrs={"name": "description"}) or soup.find("meta", property="og:description")
+                    description = desc_tag.get("content", "").strip() if desc_tag else ""
+                if not og_image:
+                    img_tag = soup.find("meta", property="og:image")
+                    og_image = img_tag.get("content", "").strip() if img_tag else None
+
+                article_el = soup.find("article") or soup.find("main") or soup.find("div", class_=re.compile(r"content|post|article|body", re.I)) or soup.body
+                if article_el:
+                    body_content = " ".join(p.get_text().strip() for p in article_el.find_all(["p", "h1", "h2", "h3", "h4", "li"]) if p.get_text().strip())
+
+        if not body_content and not description:
+            raise RuntimeError(f"Failed to fetch content from URL: {url}")
+
+        source_data = {
+            "url": url,
+            "title": title,
+            "description": description,
+            "content": body_content,
+            "og_image": og_image,
+        }
+
+    except Exception as e:
+        logger.error("Failed to fetch URL %s: %s", url, e)
+        raise RuntimeError(f"Failed to fetch content from URL: {e}") from e
+
+    # ── Generate posts ─────────────────────────────────────────────────
+    posts_per_platform = max(1, min(posts_per_platform, 10))
+
+    try:
+        client, model, provider = _get_llm_client(use_local, provider=provider, model=model)
+        tone_instruction = TONE_GUIDES.get(tone, TONE_GUIDES["professional"])
+
+        # Condense long article bodies (map-reduce) rather than sending the full
+        # text, so a very long page doesn't blow up the prompt and the whole
+        # article still informs the posts.
+        condensed_body, condense_meta = condense_document_text(
+            body_content, provider=provider, model=model, use_local=use_local,
+        )
+        extracted_content = f"TITLE: {title}\n\nDESCRIPTION: {description}\n\nCONTENT: {condensed_body}"
+
+        platform_list = "\n".join([
+            f"- {p.upper()}: {PLATFORM_GUIDELINES.get(p, 'Standard social media post with hashtags')}"
+            for p in platforms
+        ])
+
+        def _messages(plats, n):
+            return [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a social media content creator specializing in sharing and promoting web content. "
+                        "You create engaging posts that summarize, comment on, or promote articles and web pages. "
+                        "CRITICAL: When generating posts from a webpage, you MUST always include the exact source "
+                        "URL verbatim in every single post on every platform. Do not shorten, paraphrase, omit, or "
+                        "replace the URL with placeholder text like '[link]' or 'link in bio'. The URL must appear "
+                        "as a clickable link in the post body. "
+                        + NO_EM_DASH_RULE + " "
+                        "You ALWAYS reply with valid JSON only."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Create social media posts to share this web content:\n\n"
+                        f"SOURCE URL (MUST be included verbatim in every post): {url}\n\n"
+                        f"{extracted_content}\n\n"
+                        f"TONE: {tone_instruction}\n\n"
+                        + (f"ADDITIONAL CONTEXT:\n{extra_context}\n\n" if extra_context else "")
+                        + f"Create posts for these platforms:\n{platform_list}\n\n"
+                        "For each post:\n"
+                        "1. Summarize or comment on the key points\n"
+                        f"2. ALWAYS include the source URL ({url}) verbatim in the post body — this is mandatory for every platform, with no exceptions\n"
+                        "3. Add relevant hashtags\n"
+                        "4. Make it engaging and encourage clicks/engagement\n"
+                        + _build_format_instruction(plats, n)
+                    ),
+                },
+            ]
+
+        logger.debug("Generating posts from URL via %s: %s",
+                      "Ollama" if use_local else "OpenAI", url)
+        result = _batch_generate(client, model, _messages, platforms,
+                                 posts_per_platform, use_local, provider)
+        if result:
+            logger.debug("Generated posts for %d platforms from URL", len(result))
+            return {"posts": result, "source_data": source_data, "condense_meta": condense_meta}
+
+        logger.warning("Could not extract JSON from URL generation")
+        return {"posts": {p: "" for p in platforms}, "source_data": source_data, "condense_meta": condense_meta}
+    except Exception as exc:
+        logger.exception("Post generation from URL failed")
+        raise RuntimeError("Failed to generate posts from URL") from exc
+
+
+# ── Long-document condensation (map-reduce) ─────────────────────────────────
+# ``generate_posts_from_text`` only feeds the first ~5000 chars of its input to
+# the model. For long uploaded documents that would silently drop most of the
+# content, so we first condense the full text into a compact digest that fits
+# the prompt — extracting key points from each chunk (map) and, if the merged
+# result is still too long, condensing again (reduce).
+
+CONDENSE_THRESHOLD = 6000     # chars; at or below this, pass text through unchanged
+CONDENSE_CHUNK_SIZE = 8000    # chars per map chunk
+CONDENSE_CHUNK_OVERLAP = 200  # chars of overlap so ideas aren't split mid-sentence
+CONDENSE_MAX_CHUNKS = 30      # safety cap on map chunks (~240k chars covered)
+CONDENSE_TARGET_CHARS = 4500  # aim to land the digest at/under this
+CONDENSE_HARD_CAP = 4800      # never return a digest longer than this
+CONDENSE_MAX_REDUCE_PASSES = 3
+CONDENSE_SUMMARY_MAX_TOKENS = 500
+
+
+def _split_text_into_chunks(text: str, chunk_size: int, overlap: int) -> list[str]:
+    """Split ``text`` into ~``chunk_size`` pieces, preferring paragraph breaks.
+
+    Overlap carries a little context across boundaries so a point spanning two
+    chunks isn't lost. Never splits a single word.
+    """
+    text = text.strip()
+    if len(text) <= chunk_size:
+        return [text] if text else []
+
+    chunks: list[str] = []
+    start = 0
+    n = len(text)
+    while start < n:
+        end = min(start + chunk_size, n)
+        if end < n:
+            # Prefer to break on a paragraph, then a newline, then a space.
+            window = text[start:end]
+            for sep in ("\n\n", "\n", ". ", " "):
+                idx = window.rfind(sep)
+                if idx > chunk_size // 2:  # only break late enough to stay efficient
+                    end = start + idx + len(sep)
+                    break
+        chunks.append(text[start:end].strip())
+        if end >= n:
+            break
+        start = max(end - overlap, start + 1)
+    return [c for c in chunks if c]
+
+
+def _summarize_chunk(client, model, chunk: str, use_local: bool, provider: str) -> str:
+    """Extract the key points from one chunk as a tight bulleted list."""
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You extract the key facts, insights, statistics, quotes, and takeaways "
+                "from an excerpt of a longer document. Reply with a tight bulleted list. "
+                "Preserve concrete details (numbers, names, findings, direct quotes) that "
+                "would make strong social media content. Do not add commentary, intros, or "
+                "conclusions — only the extracted points."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Extract the key points from this excerpt:\n\n{chunk}",
+        },
+    ]
+    params = {"temperature": 0.2, "max_tokens": CONDENSE_SUMMARY_MAX_TOKENS}
+    resp = client.chat.completions.create(model=model, messages=messages, **params)
+    _meter("record_chat", resp, category="document_condense",
+           provider=provider, model=model)
+    return (resp.choices[0].message.content or "").strip()
+
+
+def condense_document_text(
+    text: str,
+    provider: str | None = None,
+    model: str | None = None,
+    use_local: bool = False,
+) -> tuple[str, dict]:
+    """Condense a long document into a prompt-sized digest via map-reduce.
+
+    Short inputs (<= ``CONDENSE_THRESHOLD``) are returned unchanged. Longer text
+    is chunked and each chunk is summarized (map); if the merged summary is still
+    too long it is condensed again (reduce), up to ``CONDENSE_MAX_REDUCE_PASSES``.
+
+    Returns ``(digest, meta)`` where ``meta`` records what happened. Per-chunk LLM
+    failures are tolerated (that chunk is skipped); only if *every* chunk fails do
+    we fall back to the truncated original so generation can still proceed.
+    """
+    text = (text or "").strip()
+    original_len = len(text)
+    meta = {
+        "condensed": False,
+        "original_chars": original_len,
+        "final_chars": original_len,
+        "chunks": 0,
+        "reduce_passes": 0,
+        "chunks_dropped": False,
+    }
+    if original_len <= CONDENSE_THRESHOLD:
+        return text, meta
+
+    client, model, provider = _get_llm_client(use_local, provider=provider, model=model)
+
+    chunks = _split_text_into_chunks(text, CONDENSE_CHUNK_SIZE, CONDENSE_CHUNK_OVERLAP)
+    if len(chunks) > CONDENSE_MAX_CHUNKS:
+        chunks = chunks[:CONDENSE_MAX_CHUNKS]
+        meta["chunks_dropped"] = True
+    meta["chunks"] = len(chunks)
+
+    def _summarize_all(pieces: list[str]) -> list[str]:
+        out = []
+        for piece in pieces:
+            try:
+                summary = _summarize_chunk(client, model, piece, use_local, provider)
+                if summary:
+                    out.append(summary)
+            except Exception:
+                logger.warning("Chunk summarization failed; skipping a section", exc_info=True)
+        return out
+
+    summaries = _summarize_all(chunks)
+    if not summaries:
+        # Every summarization failed — fall back to the truncated original.
+        logger.warning("Document condensation produced no summaries; falling back to truncation")
+        fallback = text[:CONDENSE_HARD_CAP]
+        meta["final_chars"] = len(fallback)
+        meta["failed"] = True
+        return fallback, meta
+
+    digest = "\n\n".join(f"[Section {i + 1}]\n{s}" for i, s in enumerate(summaries))
+
+    # Reduce: keep condensing until the digest fits or we hit the pass cap.
+    passes = 0
+    while len(digest) > CONDENSE_TARGET_CHARS and passes < CONDENSE_MAX_REDUCE_PASSES:
+        sub_chunks = _split_text_into_chunks(digest, CONDENSE_CHUNK_SIZE, CONDENSE_CHUNK_OVERLAP)
+        if len(sub_chunks) <= 1:
+            break  # can't reduce a single chunk further
+        reduced = _summarize_all(sub_chunks)
+        if not reduced:
+            break
+        digest = "\n\n".join(reduced)
+        passes += 1
+    meta["reduce_passes"] = passes
+
+    if len(digest) > CONDENSE_HARD_CAP:
+        # Trim on a line boundary so we don't cut mid-point.
+        digest = digest[:CONDENSE_HARD_CAP].rsplit("\n", 1)[0].rstrip()
+
+    meta["condensed"] = True
+    meta["final_chars"] = len(digest)
+    logger.info(
+        "Condensed document: %d chars -> %d chars across %d chunk(s), %d reduce pass(es)",
+        original_len, len(digest), meta["chunks"], passes,
+    )
+    return digest, meta
+
+
+def generate_posts_from_text(
+    text: str,
+    platforms: List[str] | None = None,
+    tone: str = "professional",
+    topic: str | None = None,
+    posts_per_platform: int = 10,
+    extra_context: str | None = None,
+    use_local: bool = False,
+    source_url: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+) -> dict:
+    """Generate social media posts from user-provided text content.
+
+    If ``source_url`` is provided, the generator is instructed to include that
+    URL verbatim in every post (used for saved URL sources and similar flows
+    where the text was extracted from a webpage).
+    """
+    if platforms is None:
+        platforms = ["linkedin", "threads", "twitter"]
+
+    posts_per_platform = max(1, min(posts_per_platform, 10))
+
+    try:
+        client, model, provider = _get_llm_client(use_local, provider=provider, model=model)
+        tone_instruction = TONE_GUIDES.get(tone, TONE_GUIDES["professional"])
+
+        platform_list = "\n".join([
+            f"- {p.upper()}: {PLATFORM_GUIDELINES.get(p, 'Standard social media post with hashtags')}"
+            for p in platforms
+        ])
+
+        topic_section = f"TOPIC: {topic}\n\n" if topic else ""
+        url_section = f"SOURCE URL (MUST be included verbatim in every post): {source_url}\n\n" if source_url else ""
+        system_url_rule = (
+            " CRITICAL: A SOURCE URL has been provided with this content. You MUST include that exact URL "
+            "verbatim in every single post on every platform. Do not shorten, paraphrase, omit, or replace "
+            "the URL with placeholder text like '[link]' or 'link in bio'. The URL must appear as a clickable "
+            "link in the post body."
+            if source_url else ""
+        )
+        if source_url:
+            post_steps = (
+                "1. Capture the key message or insight\n"
+                f"2. ALWAYS include the source URL ({source_url}) verbatim in the post body — this is mandatory for every platform, with no exceptions\n"
+                "3. Optimize for the platform's format\n"
+                "4. Include relevant hashtags\n"
+                "5. Make it engaging and shareable\n"
+            )
+        else:
+            post_steps = (
+                "1. Capture the key message or insight\n"
+                "2. Optimize for the platform's format\n"
+                "3. Include relevant hashtags\n"
+                "4. Make it engaging and shareable\n"
+            )
+
+        def _messages(plats, n):
+            return [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a social media content creator. You transform text content into engaging "
+                        "social media posts optimized for different platforms."
+                        f"{system_url_rule} "
+                        + NO_EM_DASH_RULE + " "
+                        "You ALWAYS reply with valid JSON only."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Transform the following content into social media posts:\n\n"
+                        f"{topic_section}"
+                        f"{url_section}"
+                        f"CONTENT:\n{text[:5000]}\n\n"
+                        f"TONE: {tone_instruction}\n\n"
+                        + (f"ADDITIONAL CONTEXT:\n{extra_context}\n\n" if extra_context else "")
+                        + f"Create posts for these platforms:\n{platform_list}\n\n"
+                        "For each post:\n"
+                        + post_steps
+                        + _build_format_instruction(plats, n)
+                    ),
+                },
+            ]
+
+        logger.debug("Generating posts from text via %s (length: %d)",
+                      "Ollama" if use_local else "OpenAI", len(text))
+        result = _batch_generate(client, model, _messages, platforms,
+                                 posts_per_platform, use_local, provider)
+        if result:
+            logger.debug("Generated posts for %d platforms from text", len(result))
+            return result
+
+        logger.warning("Could not extract JSON from text generation")
+        return {p: "" for p in platforms}
+    except Exception as exc:
+        logger.exception("Post generation from text failed")
+        raise RuntimeError("Failed to generate posts from text") from exc
+
+
+def _normalize_llm_posts(parsed: dict | list) -> dict | None:
+    """Convert various LLM output shapes into ``{platform: content_or_list}``."""
+    if isinstance(parsed, dict):
+        # Already the expected shape, but values might be dicts with a "post" key
+        result = {}
+        for k, v in parsed.items():
+            if isinstance(v, str):
+                result[k] = v
+            elif isinstance(v, list):
+                result[k] = [
+                    item.get("post", item.get("content", str(item)))
+                    if isinstance(item, dict) else str(item)
+                    for item in v
+                ]
+            elif isinstance(v, dict):
+                result[k] = v.get("post", v.get("content", str(v)))
+        return result if result else None
+
+    if isinstance(parsed, list):
+        # Array of {"platform": "...", "post": "..."} objects
+        result: dict[str, list[str]] = {}
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            plat = item.get("platform", "").lower().strip()
+            text = item.get("post", item.get("content", item.get("text", "")))
+            if plat and text and isinstance(text, str):
+                result.setdefault(plat, []).append(text)
+        # Unwrap single-element lists
+        for k, v in result.items():
+            if len(v) == 1:
+                result[k] = v[0]
+        return result if result else None
+
+    return None
+
+
+def _extract_json_from_llm(text: str) -> dict | None:
+    """Best-effort extraction of a JSON dict from an LLM response.
+
+    Handles: plain JSON, markdown fences, embedded JSON, and
+    array-of-objects format that local models sometimes produce.
+    """
+    import re
+
+    def _sanitize(s: str) -> str:
+        return s.replace("\u201c", '"').replace("\u201d", '"').replace("\u2018", "'").replace("\u2019", "'")
+
+    def _try_parse(s: str) -> dict | None:
+        try:
+            return _normalize_llm_posts(json.loads(s))
+        except (json.JSONDecodeError, ValueError):
+            pass
+        sanitized = _sanitize(s)
+        if sanitized != s:
+            try:
+                return _normalize_llm_posts(json.loads(sanitized))
+            except (json.JSONDecodeError, ValueError):
+                pass
+        return None
+
+    # 1. Direct parse
+    result = _try_parse(text)
+    if result:
+        return result
+
+    # 2. Markdown code fences
+    fence_match = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
+    if fence_match:
+        result = _try_parse(fence_match.group(1).strip())
+        if result:
+            return result
+
+    # 3. First { … last }  (object)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end > start:
+        result = _try_parse(text[start:end + 1])
+        if result:
+            return result
+
+    # 4. First [ … last ]  (array)
+    start = text.find("[")
+    end = text.rfind("]")
+    if start != -1 and end > start:
+        result = _try_parse(text[start:end + 1])
+        if result:
+            return result
+
+    return None
+
+
+def generate_posts_from_images(
+    images: list[dict],
+    prompt: str | None = None,
+    platforms: List[str] | None = None,
+    tone: str = "professional",
+    posts_per_platform: int = 10,
+    extra_context: str | None = None,
+    use_local: bool = False,
+    provider: str | None = None,
+    model: str | None = None,
+) -> dict:
+    """Generate social media posts by analysing one or more images.
+
+    Images uses vision=True so the vision model is selected for local.
+    Batch generation is NOT used here because image payloads are large
+    and re-sending them multiple times is wasteful -- a single call is made.
+    """
+    if platforms is None:
+        platforms = ["linkedin", "threads", "twitter"]
+
+    posts_per_platform = max(1, min(posts_per_platform, 10))
+
+    try:
+        client, model, provider = _get_llm_client(use_local, vision=True, provider=provider, model=model)
+        params = _get_llm_params(use_local, num_platforms=len(platforms),
+                                 posts_per_call=posts_per_platform)
+        tone_instruction = TONE_GUIDES.get(tone, TONE_GUIDES["professional"])
+
+        platform_list = "\n".join([
+            f"- {p.upper()}: {PLATFORM_GUIDELINES.get(p, 'Standard social media post with hashtags')}"
+            for p in platforms
+        ])
+
+        prompt_section = f"FOCUS: {prompt}\n" if prompt else ""
+        extra_section = f"CONTEXT: {extra_context}\n" if extra_context else ""
+
+        user_content: list[dict] = [
+            {
+                "type": "text",
+                "text": (
+                    f"Look at the image and write social media posts about it.\n"
+                    f"{prompt_section}"
+                    f"{extra_section}"
+                    f"Tone: {tone_instruction}\n"
+                    f"Platforms: {platform_list}\n\n"
+                    + _build_format_instruction(platforms, posts_per_platform)
+                ),
+            }
+        ]
+
+        for img in images:
+            user_content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{img['mime_type']};base64,{img['base64']}",
+                },
+            })
+
+        logger.debug(
+            "Generating posts from %d image(s) via %s",
+            len(images),
+            "Ollama" if use_local else "OpenAI",
+        )
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a social media content creator. "
+                        "You write engaging posts about images. "
+                        + NO_EM_DASH_RULE + " "
+                        "You ALWAYS reply with valid JSON only."
+                    ),
+                },
+                {"role": "user", "content": user_content},
+            ],
+            **params,
+        )
+        _meter("record_chat", response, category="vision_posts",
+               provider=provider, model=model)
+
+        raw_text = response.choices[0].message.content.strip()
+        result = _extract_json_from_llm(raw_text)
+        if result:
+            logger.debug("Generated posts for %d platforms from images", len(result))
+            return result
+
+        logger.warning("Could not extract JSON; distributing raw text across platforms")
+        return {p: raw_text for p in platforms}
+    except Exception as exc:
+        logger.exception("Post generation from images failed")
+        raise RuntimeError("Failed to generate posts from images") from exc
+
+
+def write_results_json(transcript: str, summary: str, actions: List[str], output_path: str) -> None:
+    """Write the analysis results to ``output_path`` as JSON."""
+
+    # Gather everything we generated so it can be saved and reused
+    data = {
+        "transcript": transcript,
+        "summary": summary,
+        "action_items": actions,
+    }
+    try:
+        # ``indent`` makes the JSON readable for humans inspecting the file
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        logger.debug("Results written to %s", output_path)
+    except Exception as exc:
+        logger.exception("Failed to write results JSON")
+        raise RuntimeError("Could not write results JSON") from exc
+
+
+def main(audio_path: str, json_path: str | None = None, verbose: bool = False) -> None:
+    """Run the full pipeline and write results to disk."""
+    configure_logging(verbose)
+
+    try:
+        # 1) Transcribe the audio file
+        logger.info("Transcribing audio...")
+        transcript = transcribe_audio(audio_path)
+        logger.info("Transcription complete")
+
+        # 2) Summarise the transcript
+        logger.info("Generating summary...")
+        summary = summarize_text(transcript)
+        logger.info("Summary complete")
+
+        # 3) Pull out any explicit action items
+        logger.info("Extracting action items...")
+        actions = extract_action_items(transcript)
+        logger.info("Action item extraction complete")
+
+        # Log the results for easy visibility in the console
+        logger.info("Summary:\n%s", summary)
+        logger.info("Action Items:")
+        for item in actions:
+            logger.info("- %s", item)
+
+        # Default JSON path is alongside the audio file
+        if json_path is None:
+            json_path = os.path.splitext(audio_path)[0] + ".json"
+        write_results_json(transcript, summary, actions, json_path)
+        logger.info("Results written to %s", json_path)
+    except Exception as exc:
+        # Any failure along the way is logged then re-raised
+        logger.exception("Processing failed")
+
+
+# ── YouTube Thumbnail Generation ─────────────────────────────────────────
+
+
+def fetch_youtube_metadata(url: str) -> dict:
+    """Fetch metadata for a YouTube video using yt-dlp.
+
+    Returns a dict with keys: title, description, channel, tags,
+    categories, thumbnail, video_id, duration.
+    """
+    video_id = get_youtube_video_id(url)
+    if not video_id:
+        raise ValueError(f"Could not extract video ID from: {url}")
+
+    try:
+        import yt_dlp
+    except ImportError:
+        raise RuntimeError("yt-dlp is required. Install with: pip install yt-dlp")
+
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    return {
+        "video_id": video_id,
+        "title": info.get("title", ""),
+        "description": (info.get("description") or "")[:1500],
+        "channel": info.get("channel", info.get("uploader", "")),
+        "tags": info.get("tags") or [],
+        "categories": info.get("categories") or [],
+        "thumbnail": info.get("thumbnail")
+            or f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg",
+        "duration": info.get("duration", 0),
+    }
+
+
+def _build_thumbnail_prompt(metadata: dict, aspect: str, style: str = "bold") -> str:
+    """Build a single-stage image-generation prompt for a YouTube thumbnail.
+
+    The prompt instructs ``gpt-image-1`` to render the *complete* thumbnail
+    including bold text, visual effects, and photorealistic elements — no
+    post-processing or text overlay needed.
+
+    Parameters
+    ----------
+    metadata : dict
+        Output of :func:`fetch_youtube_metadata`.
+    aspect : str
+        ``"16:9"`` for landscape or ``"9:16"`` for portrait / Shorts.
+    style : str
+        Visual style – ``"bold"``, ``"minimal"``, or ``"cinematic"``.
+    """
+    title = metadata.get("title", "Video")
+    channel = metadata.get("channel", "")
+    description = (metadata.get("description") or "")[:400]
+    tags = ", ".join(metadata.get("tags", [])[:8])
+
+    # Extract a short hook phrase from description (first sentence or clause)
+    hook = ""
+    if description:
+        for sep in [".", "!", "?", "\n", " - "]:
+            if sep in description[:200]:
+                hook = description[:200].split(sep)[0].strip()
+                break
+        if not hook:
+            hook = description[:80].strip()
+        # Keep it punchy — truncate long hooks
+        if len(hook) > 60:
+            hook = hook[:57].rstrip() + "..."
+
+    # Short title for the main text element (truncate if very long)
+    display_title = title.upper()
+    if len(display_title) > 50:
+        display_title = display_title[:47].rstrip() + "..."
+
+    orientation = "landscape" if aspect == "16:9" else "portrait"
+    thumb_type = "YouTube thumbnail" if aspect == "16:9" else "YouTube Shorts thumbnail"
+
+    # --- Style-specific prompt templates ---
+    if style == "minimal":
+        prompt = (
+            f"Create a highly attractive {thumb_type} image. "
+            f"Clean, modern design with strong color blocking and bold sans-serif typography. "
+            f"A high-quality photographic background related to the topic: {title}. "
+            f"Large, bold white text reading '{display_title}' prominently placed with a "
+            f"subtle drop shadow for readability. "
+        )
+        if hook:
+            prompt += (
+                f"Below the main text, smaller clean text reading '{hook}' in a "
+                f"contrasting accent color. "
+            )
+        if channel:
+            prompt += f"Small text '{channel}' in the corner. "
+        prompt += (
+            f"Minimalist but eye-catching. Strong contrast between text and background. "
+            f"MKBHD / tech-review style thumbnail. Professional, sharp, high resolution. "
+            f"{orientation.capitalize()} ({aspect} aspect ratio)."
+        )
+
+    elif style == "cinematic":
+        prompt = (
+            f"Create a highly attractive {thumb_type} image styled like a movie poster. "
+            f"Dramatic cinematic lighting with lens flares and volumetric light. "
+            f"A photorealistic epic scene related to the topic: {title}. "
+            f"The title text '{display_title}' rendered in large, bold cinematic movie-poster "
+            f"font with metallic or chrome effect, centered prominently. "
+        )
+        if hook:
+            prompt += (
+                f"A tagline below reading '{hook}' in elegant serif font with subtle glow. "
+            )
+        if channel:
+            prompt += f"Small text '{channel}' at the bottom in clean white font. "
+        prompt += (
+            f"Rich, moody color grading with teal and orange tones. Atmospheric depth of field. "
+            f"Epic scale and drama. High contrast. "
+            f"{orientation.capitalize()} ({aspect} aspect ratio)."
+        )
+
+    else:  # "bold" (default) — MrBeast-style maximum impact
+        prompt = (
+            f"Create a highly attractive {thumb_type}. "
+            f"Photorealistic style with graphic elements. "
+            f"A confident, expressive person pointing directly at the viewer or reacting with "
+            f"an amazed expression, related to the topic: {title}. "
+            f"Large bold 3D text reading '{display_title}' at the top in bright yellow with "
+            f"thick black outline and neon glow effect. "
+        )
+        if hook:
+            prompt += (
+                f"Below that, even larger impactful text reading '{hook.upper()}' in bold "
+                f"with red/orange glow and 3D depth effect. "
+            )
+        if channel:
+            prompt += (
+                f"Small text '{channel}' at the bottom in white with blue glow. "
+            )
+        prompt += (
+            f"A red 'WATCH NOW!' button with play arrow icon in the bottom right corner. "
+            f"Extremely vibrant, high contrast, saturated colors. "
+            f"Dynamic composition with arrows or graphic elements directing attention. "
+            f"Professional YouTube thumbnail style — loud, attention-grabbing, clickable. "
+            f"{orientation.capitalize()} ({aspect} aspect ratio)."
+        )
+
+    # Add topic context from tags if available
+    if tags:
+        prompt += f" The visual theme should relate to: {tags}."
+
+    return prompt
+
+
+def _resolve_thumbnail_cli_argv(raw: str) -> List[str]:
+    """Turn ``ASI_GENERATE_IMAGE`` into argv for ``subprocess`` (executable on ``PATH`` or full path)."""
+    raw = raw.strip()
+    if not raw:
+        raise RuntimeError(
+            "ASI_GENERATE_IMAGE is set but empty. Remove it to use OpenAI, or set a valid command."
+        )
+    parts = shlex.split(raw, posix=os.name != "nt")
+    if not parts:
+        raise RuntimeError("ASI_GENERATE_IMAGE could not be parsed as a command.")
+    if len(parts) == 1:
+        exe = os.path.expanduser(parts[0])
+        if os.sep in exe or (os.altsep and exe and os.altsep in exe):
+            if not os.path.isfile(exe):
+                raise RuntimeError(
+                    f"ASI_GENERATE_IMAGE path does not exist or is not a file: {exe}"
+                )
+            return [exe]
+        resolved = shutil.which(exe)
+        if not resolved:
+            raise RuntimeError(
+                "ASI_GENERATE_IMAGE command not found on PATH. Use a full path, fix PATH, "
+                "or remove ASI_GENERATE_IMAGE to generate thumbnails via OpenAI instead."
+            )
+        return [resolved]
+    head = os.path.expanduser(parts[0])
+    if os.sep not in head and (not os.altsep or not head or os.altsep not in head):
+        resolved_head = shutil.which(head)
+        if not resolved_head:
+            raise RuntimeError(
+                f"ASI_GENERATE_IMAGE command not found on PATH: {parts[0]!r}"
+            )
+        head = resolved_head
+    parts[0] = head
+    return parts
+
+
+def suggested_thumbnail_prompt(metadata: dict, aspect: str, style: str = "bold") -> str:
+    """Return the default image-generation prompt for a YouTube thumbnail.
+
+    Public wrapper around ``_build_thumbnail_prompt`` for use by the web layer.
+    """
+    return _build_thumbnail_prompt(metadata, aspect, style)
+
+
+MAX_CUSTOM_PROMPT_LEN = 16_000
+
+
+def generate_youtube_thumbnail(
+    url: str,
+    aspect: str = "16:9",
+    style: str = "bold",
+    use_local: bool = False,
+    custom_prompt: str | None = None,
+) -> dict:
+    """Generate a complete YouTube thumbnail in a single AI pass.
+
+    By default calls OpenAI's Images API with model ``gpt-image-1`` (requires
+    ``OPENAI_API_KEY``). If ``ASI_GENERATE_IMAGE`` is set to a non-empty command,
+    that CLI is invoked instead with a JSON payload (legacy integration).
+
+    Parameters
+    ----------
+    url : str
+        YouTube video URL.
+    aspect : str
+        ``"16:9"`` or ``"9:16"``.
+    style : str
+        ``"bold"``, ``"minimal"``, or ``"cinematic"``.
+    use_local : bool
+        Unused (kept for API compatibility).
+    custom_prompt : str or None
+        If provided and non-empty, used instead of the auto-generated prompt.
+
+    Returns
+    -------
+    dict
+        ``{"image_base64": ..., "prompt": ..., "metadata": ...}``
+    """
+    import base64
+    import json
+    import subprocess
+    import tempfile
+
+    from openai import OpenAI
+
+    metadata = fetch_youtube_metadata(url)
+
+    if custom_prompt and custom_prompt.strip():
+        prompt = custom_prompt.strip()[:MAX_CUSTOM_PROMPT_LEN]
+    else:
+        prompt = _build_thumbnail_prompt(metadata, aspect, style)
+
+    logger.info("Generating thumbnail (%s, %s style) for: %s", aspect, style, url)
+
+    # Map aspect ratio to gpt-image-1 size parameter
+    size = "1536x1024" if aspect == "16:9" else "1024x1536"
+
+    cli_env = os.environ.get("ASI_GENERATE_IMAGE", "").strip()
+    if cli_env:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cmd_payload = json.dumps({
+                "prompt": prompt,
+                "filename": "thumbnail",
+                "aspect_ratio": aspect,
+                "size": size,
+                "model": "gpt_image_1",
+                "quality": "high",
+            })
+            result = subprocess.run(
+                _resolve_thumbnail_cli_argv(cli_env) + [cmd_payload],
+                cwd=tmpdir,
+                env=os.environ,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if result.returncode != 0:
+                logger.error("thumbnail CLI failed: %s", result.stderr)
+                raise RuntimeError(
+                    f"Image generation failed: {result.stderr.strip() or 'unknown error'}"
+                )
+
+            img_path = os.path.join(tmpdir, "thumbnail.png")
+            if not os.path.isfile(img_path):
+                raise RuntimeError("Image generation did not produce expected output file")
+
+            with open(img_path, "rb") as f:
+                image_base64 = base64.b64encode(f.read()).decode("utf-8")
+    else:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "Set OPENAI_API_KEY for thumbnail generation, or set ASI_GENERATE_IMAGE "
+                "to an external image CLI."
+            )
+        client = OpenAI(api_key=api_key, timeout=120.0)
+        # gpt-image-1 does not accept response_format (always returns base64); DALL·E uses url/b64_json.
+        response = client.images.generate(
+            model="gpt-image-1",
+            prompt=prompt,
+            size=size,
+            quality="high",
+            n=1,
+        )
+        if not response.data or not response.data[0].b64_json:
+            raise RuntimeError("OpenAI image generation returned no image data")
+        image_base64 = response.data[0].b64_json
+        _meter("record_image", response, category="thumbnail",
+               model="gpt-image-1", provider="openai")
+
+    return {
+        "image_base64": image_base64,
+        "prompt": prompt,
+        "metadata": metadata,
+    }
+
+
+if __name__ == "__main__":
+    import argparse
+
+    # Command line interface for standalone usage
+    parser = argparse.ArgumentParser(description="Transcribe and analyze podcasts")
+    parser.add_argument("audio", help="Path to the podcast audio file")
+    parser.add_argument(
+        "-j",
+        "--json",
+        help=(
+            "Optional path to save results as JSON; defaults to <audio>.json"
+        ),
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose debug logging",
+    )
+    args = parser.parse_args()
+    # Execute the pipeline with the provided options
+    main(args.audio, args.json, args.verbose)

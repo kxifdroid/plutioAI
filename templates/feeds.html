@@ -1,0 +1,275 @@
+{% extends "base.html" %}
+{% from 'partials/macros.html' import stat_metric, empty_state %}
+
+{% block title %}Dashboard | PlutioAI{% endblock %}
+
+{% block page_head %}
+<div class="mb-4 pb-3 border-bottom">
+    <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
+        <div>
+            <span class="micro-label d-block mb-1">{{ greeting|default('Welcome back') }}</span>
+            <h1 class="mb-2" style="font-size: 1.7rem;">Turn one piece of content into everything you need.</h1>
+            <p class="mb-0" style="max-width: 58ch;">
+                Bring in a YouTube video, podcast, article or file, and PlutioAI turns it into summaries, articles and ready-to-publish social posts.
+            </p>
+        </div>
+        <div>
+            <a href="{{ url_for('compose_page') }}" class="btn btn-primary d-inline-flex align-items-center gap-1">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+                Create content
+            </a>
+        </div>
+    </div>
+</div>
+
+<div class="stat-grid mb-4">
+    <div class="metric-stat">
+        <div class="metric-stat__label">Content sources</div>
+        <div class="metric-stat__value">{{ feeds|length }}</div>
+        <div class="metric-stat__hint">Feeds & channels followed</div>
+    </div>
+    <div class="metric-stat">
+        <div class="metric-stat__label">Connections</div>
+        <div class="metric-stat__value" style="font-size: 1.1rem; padding-top: 0.35rem;">
+            <a href="{{ url_for('accounts_page') }}" class="text-decoration-none d-inline-flex align-items-center gap-1">
+                Manage accounts &rarr;
+            </a>
+        </div>
+        <div class="metric-stat__hint">Multi-platform destinations</div>
+    </div>
+    <div class="metric-stat">
+        <div class="metric-stat__label">Schedule</div>
+        <div class="metric-stat__value" style="font-size: 1.1rem; padding-top: 0.35rem;">
+            <a href="{{ url_for('schedule_list') }}" class="text-decoration-none d-inline-flex align-items-center gap-1">
+                View calendar &rarr;
+            </a>
+        </div>
+        <div class="metric-stat__hint">Queue & scheduled posts</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-baseline mb-2">
+    <div>
+        <h2 style="font-size: 1.15rem; margin-bottom: 0.2rem;">Content sources</h2>
+        <p class="small text-muted mb-3">Add a feed or channel to pull new content from automatically.</p>
+    </div>
+</div>
+
+<form method="post" class="row g-2 mb-4">
+    <div class="col-auto flex-grow-1">
+        <label for="feed_url" class="visually-hidden">Add Feed URL</label>
+        <input type="text" class="form-control" name="feed_url" id="feed_url" placeholder="Enter RSS feed or YouTube URL...">
+    </div>
+    <div class="col-auto">
+        <button type="submit" class="btn btn-primary d-inline-flex align-items-center gap-1">
+            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            Add Feed
+        </button>
+    </div>
+</form>
+
+{% if feeds or filter_type or search_query %}
+<!-- Filter Bar -->
+<div class="filter-bar mb-3">
+    <form method="get" class="row g-2 align-items-end">
+        <div class="col-md-4">
+            <label class="form-label">Search</label>
+            <input type="text" class="form-control" name="q" value="{{ search_query }}" placeholder="Search feeds...">
+        </div>
+        <div class="col-md-2">
+            <label class="form-label">Type</label>
+            <select name="type" class="form-select">
+                <option value="">All Types</option>
+                <option value="audio" {% if filter_type == 'audio' %}selected{% endif %}>Audio</option>
+                <option value="text" {% if filter_type == 'text' %}selected{% endif %}>Text</option>
+                <option value="youtube" {% if filter_type == 'youtube' %}selected{% endif %}>YouTube</option>
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label">Sort By</label>
+            <select name="sort" class="form-select">
+                <option value="title" {% if sort_by == 'title' %}selected{% endif %}>Title</option>
+                <option value="last_post" {% if sort_by == 'last_post' %}selected{% endif %}>Last Post</option>
+                <option value="type" {% if sort_by == 'type' %}selected{% endif %}>Type</option>
+                <option value="items" {% if sort_by == 'items' %}selected{% endif %}>Item Count</option>
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label">Order</label>
+            <select name="order" class="form-select">
+                <option value="asc" {% if sort_order == 'asc' %}selected{% endif %}>Ascending</option>
+                <option value="desc" {% if sort_order == 'desc' %}selected{% endif %}>Descending</option>
+            </select>
+        </div>
+        <div class="col-md-2">
+            <button type="submit" class="btn btn-secondary w-100">Apply</button>
+        </div>
+    </form>
+</div>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <span class="results-count">
+        Showing <strong>{{ feeds|length }}</strong> feed{% if feeds|length != 1 %}s{% endif %}
+        {% if filter_type or search_query %}
+        (filtered)
+        <a href="{{ url_for('index') }}" class="ms-2 text-decoration-underline">Clear filters</a>
+        {% endif %}
+    </span>
+    <div class="d-flex gap-2">
+        <button type="button" class="btn btn-sm btn-outline-danger d-none" id="bulk-delete-btn" 
+                onclick="confirmBulkDelete()">
+            Delete Selected (<span id="selected-count">0</span>)
+        </button>
+        <a href="{{ url_for('refresh_all_feeds') }}" class="btn btn-sm btn-outline-secondary" 
+           onclick="this.innerHTML='<span class=\'spinner-border spinner-border-sm\'></span> Refreshing...'; this.classList.add('disabled');">
+            Refresh Metadata
+        </a>
+    </div>
+</div>
+
+{% if feeds %}
+<form id="bulk-delete-form" method="post" action="{{ url_for('bulk_delete_feeds') }}">
+<div class="table-responsive">
+    <table class="table table-hover align-middle">
+        <thead>
+            <tr>
+                <th style="width: 36px;">
+                    <input type="checkbox" class="form-check-input" id="select-all" 
+                           onchange="toggleSelectAll(this)" title="Select all">
+                </th>
+                <th>Title</th>
+                <th>Type</th>
+                <th>Last Post</th>
+                <th>Items</th>
+                <th class="text-truncate" style="max-width: 200px;">URL</th>
+                <th class="text-end">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for f in feeds %}
+            <tr>
+                <td>
+                    <input type="checkbox" class="form-check-input feed-checkbox" 
+                           name="feed_ids" value="{{ f.id }}" onchange="updateSelectedCount()">
+                </td>
+                <td>
+                    <a href="{{ url_for('view_feed', feed_id=f.id) }}" class="fw-medium text-decoration-none">
+                        {{ f.title }}
+                    </a>
+                </td>
+                <td>
+                    {% if f.type == 'audio' %}
+                    <span class="badge badge-audio">Audio</span>
+                    {% elif f.type == 'text' %}
+                    <span class="badge badge-text">Text</span>
+                    {% elif f.type == 'youtube' %}
+                    <span class="badge badge-youtube">YouTube</span>
+                    {% else %}
+                    <span class="badge badge-unknown" title="Open feed to detect type">Unknown</span>
+                    {% endif %}
+                </td>
+                <td class="text-nowrap">
+                    {% if f.last_post %}
+                    {{ f.last_post.strftime('%Y-%m-%d') }}
+                    {% set days_ago = (now - f.last_post).days if now else 0 %}
+                    {% if days_ago == 0 %}
+                    <small class="text-success">(today)</small>
+                    {% elif days_ago == 1 %}
+                    <small class="text-muted">(yesterday)</small>
+                    {% elif days_ago <= 7 %}
+                    <small class="text-muted">({{ days_ago }}d ago)</small>
+                    {% endif %}
+                    {% elif not f.last_checked %}
+                    <span class="text-muted" title="Click Open to fetch">—</span>
+                    {% else %}
+                    <span class="text-muted">—</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if f.item_count %}
+                    <span class="badge bg-secondary">{{ f.item_count }}</span>
+                    {% else %}
+                    <span class="text-muted">—</span>
+                    {% endif %}
+                </td>
+                <td class="text-truncate" style="max-width: 200px;">
+                    <span class="text-muted small" title="{{ f.url }}">{{ f.url }}</span>
+                </td>
+                <td class="text-end">
+                    <div class="btn-group btn-group-sm" role="group">
+                        <a class="btn btn-outline-secondary" href="{{ url_for('view_feed', feed_id=f.id) }}">Open</a>
+                        <button type="button" class="btn btn-outline-danger" 
+                                onclick="deleteSingleFeed({{ f.id }})">Delete</button>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+</form>
+
+<!-- Hidden form for single delete -->
+<form id="single-delete-form" method="post" style="display: none;"></form>
+
+<script>
+function toggleSelectAll(checkbox) {
+    const feedCheckboxes = document.querySelectorAll('.feed-checkbox');
+    feedCheckboxes.forEach(cb => cb.checked = checkbox.checked);
+    updateSelectedCount();
+}
+
+function updateSelectedCount() {
+    const checked = document.querySelectorAll('.feed-checkbox:checked').length;
+    const total = document.querySelectorAll('.feed-checkbox').length;
+    var countEl = document.getElementById('selected-count');
+    if (countEl) countEl.textContent = checked;
+    var btn = document.getElementById('bulk-delete-btn');
+    if (btn) btn.classList.toggle('d-none', checked === 0);
+    var selAll = document.getElementById('select-all');
+    if (selAll) {
+        selAll.checked = checked === total && total > 0;
+        selAll.indeterminate = checked > 0 && checked < total;
+    }
+}
+
+function confirmBulkDelete() {
+    const count = document.querySelectorAll('.feed-checkbox:checked').length;
+    if (count === 0) return;
+    if (confirm(`Delete ${count} feed${count > 1 ? 's' : ''} and ALL their episodes, articles, and tickets? This cannot be undone!`)) {
+        document.getElementById('bulk-delete-form').submit();
+    }
+}
+
+function deleteSingleFeed(feedId) {
+    if (confirm('Delete this feed and all its episodes, articles, and tickets?')) {
+        const form = document.getElementById('single-delete-form');
+        form.action = '{{ url_for("remove_feed", feed_id=0) }}'.replace('/0/', '/' + feedId + '/');
+        form.submit();
+    }
+}
+</script>
+{% else %}
+<div class="empty-state">
+    <div class="empty-state__title">No feeds found</div>
+    <div class="empty-state__desc">No feeds match your current filters.</div>
+    <a href="{{ url_for('index') }}" class="btn btn-secondary btn-sm">Clear filters</a>
+</div>
+{% endif %}
+
+{% else %}
+<div class="empty-state">
+    <div class="empty-state__title">No content sources yet</div>
+    <div class="empty-state__desc">Add your first RSS feed or YouTube URL above to get started.</div>
+    <a href="{{ url_for('compose_page') }}" class="btn btn-primary btn-sm">Create content</a>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}PlutioAI{% endblock %}</title>
+    <meta name="description" content="PlutioAI — turn one piece of content into everything you need.">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+    <link
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+        integrity="sha384-9ndCyUaIbzAi2FUVXJi0CjmCapSmO7SnpJef0486qhLnuZ2cdeRhO02iuK6FUUVM"
+        crossorigin="anonymous"
+    >
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+    <style>
+        pre { white-space: pre-wrap; }
+        .description-cell { white-space: normal; max-width: 400px; }
+        .summary-content h1, .summary-content h2, .summary-content h3 {
+            font-size: 1.1rem; font-weight: 600; margin-top: 1rem; margin-bottom: 0.5rem;
+        }
+        .summary-content p { margin-bottom: 0.75rem; }
+        .summary-content ul, .summary-content ol { margin-bottom: 0.75rem; padding-left: 1.5rem; }
+        .summary-content strong { font-weight: 600; }
+        .sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+        .sortable:hover { background-color: var(--surface-subtle); }
+        .sortable::after { content: ' ↕'; opacity: 0.35; font-size: 0.75em; }
+        .sortable.asc::after { content: ' ↑'; opacity: 1; color: var(--accent); }
+        .sortable.desc::after { content: ' ↓'; opacity: 1; color: var(--accent); }
+        .results-count { font-size: 0.82rem; color: var(--text-muted); }
+    </style>
+</head>
+<body>
+{% set nav = request.endpoint %}
+<header class="topbar">
+    <div class="topbar__inner">
+        <a class="topbar__brand" href="{{ url_for('index') }}" aria-label="PlutioAI">
+            <img src="{{ url_for('static', filename='logo.svg') }}" alt="PlutioAI" class="topbar__logo">
+            <span class="visually-hidden">PlutioAI</span>
+        </a>
+
+        <nav>
+            <ul class="topbar__nav">
+                <li>
+                    <a class="topbar__link {% if nav == 'index' %}topbar__link--active{% endif %}" href="{{ url_for('index') }}">
+                        Dashboard
+                    </a>
+                </li>
+                <li>
+                    <a class="topbar__link {% if nav == 'compose_page' %}topbar__link--active{% endif %}" href="{{ url_for('compose_page') }}">
+                        Create
+                    </a>
+                </li>
+                <li>
+                    <a class="topbar__link {% if nav == 'briefs_page' %}topbar__link--active{% endif %}" href="{{ url_for('briefs_page') }}">
+                        Agent
+                    </a>
+                </li>
+                <li>
+                    <a class="topbar__link {% if nav in ['sources_page', 'view_articles', 'view_tickets', 'library_page'] %}topbar__link--active{% endif %}" href="{{ url_for('sources_page') }}">
+                        Library
+                    </a>
+                </li>
+                <li>
+                    <a class="topbar__link {% if nav == 'schedule_list' %}topbar__link--active{% endif %}" href="{{ url_for('schedule_list') }}">
+                        Schedule
+                    </a>
+                </li>
+                <li class="dropdown">
+                    <a class="topbar__link dropdown-toggle {% if nav in ['status_page', 'activity_page', 'usage_page', 'thumbnails_page'] %}topbar__link--active{% endif %}" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                        Analytics
+                    </a>
+                    <ul class="dropdown-menu dropdown-menu-end shadow-sm border" style="font-size:0.86rem;">
+                        <li><a class="dropdown-item {% if nav == 'status_page' %}active{% endif %}" href="{{ url_for('status_page') }}">Status</a></li>
+                        <li><a class="dropdown-item {% if nav == 'activity_page' %}active{% endif %}" href="{{ url_for('activity_page') }}">Activity</a></li>
+                        <li><a class="dropdown-item {% if nav == 'usage_page' %}active{% endif %}" href="{{ url_for('usage_page') }}">Usage</a></li>
+                        <li><a class="dropdown-item {% if nav == 'thumbnails_page' %}active{% endif %}" href="{{ url_for('thumbnails_page') }}">Thumbnails</a></li>
+                    </ul>
+                </li>
+                <li>
+                    <a class="topbar__link {% if nav == 'accounts_page' %}topbar__link--active{% endif %}" href="{{ url_for('accounts_page') }}">
+                        Connections
+                    </a>
+                </li>
+            </ul>
+        </nav>
+
+        <div class="topbar__actions">
+            {% if current_user %}
+            <div class="topbar__user">
+                {% if current_user['avatar_url'] %}
+                <img class="topbar__avatar" src="{{ current_user['avatar_url'] }}" alt="{{ current_user['username'] }}" style="object-fit:cover;">
+                {% else %}
+                <div class="topbar__avatar">{{ current_user['username'][0]|upper }}</div>
+                {% endif %}
+                <span class="d-none d-lg-inline">{{ current_user['username'] }}</span>
+                <form method="post" action="{{ url_for('logout') }}" class="m-0 p-0 d-inline">
+                    <button type="submit" class="topbar__logout-btn" title="Log out" aria-label="Log out">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                            <polyline points="16 17 21 12 16 7"></polyline>
+                            <line x1="21" y1="12" x2="9" y2="12"></line>
+                        </svg>
+                    </button>
+                </form>
+            </div>
+            {% endif %}
+            <button class="topbar__toggle" id="mobileMenuBtn" aria-label="Toggle navigation menu" onclick="toggleMobileMenu()">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="3" y1="12" x2="21" y2="12"></line>
+                    <line x1="3" y1="6" x2="21" y2="6"></line>
+                    <line x1="3" y1="18" x2="21" y2="18"></line>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Mobile menu drawer -->
+    <div class="mobile-menu" id="mobileMenu">
+        <a class="topbar__link {% if nav == 'index' %}topbar__link--active{% endif %}" href="{{ url_for('index') }}">Dashboard</a>
+        <a class="topbar__link {% if nav == 'compose_page' %}topbar__link--active{% endif %}" href="{{ url_for('compose_page') }}">Create</a>
+        <a class="topbar__link {% if nav == 'briefs_page' %}topbar__link--active{% endif %}" href="{{ url_for('briefs_page') }}">Agent</a>
+        <a class="topbar__link {% if nav in ['sources_page', 'view_articles', 'view_tickets', 'library_page'] %}topbar__link--active{% endif %}" href="{{ url_for('sources_page') }}">Library</a>
+        <a class="topbar__link {% if nav == 'schedule_list' %}topbar__link--active{% endif %}" href="{{ url_for('schedule_list') }}">Schedule</a>
+        <a class="topbar__link {% if nav == 'status_page' %}topbar__link--active{% endif %}" href="{{ url_for('status_page') }}">Status</a>
+        <a class="topbar__link {% if nav == 'activity_page' %}topbar__link--active{% endif %}" href="{{ url_for('activity_page') }}">Activity</a>
+        <a class="topbar__link {% if nav == 'usage_page' %}topbar__link--active{% endif %}" href="{{ url_for('usage_page') }}">Usage</a>
+        <a class="topbar__link {% if nav == 'thumbnails_page' %}topbar__link--active{% endif %}" href="{{ url_for('thumbnails_page') }}">Thumbnails</a>
+        <a class="topbar__link {% if nav == 'accounts_page' %}topbar__link--active{% endif %}" href="{{ url_for('accounts_page') }}">Connections</a>
+        {% if current_user %}
+        <div class="d-flex justify-content-between align-items-center pt-2 mt-2 border-top">
+            <span class="small text-muted">{{ current_user['username'] }}</span>
+            <form method="post" action="{{ url_for('logout') }}" class="m-0 p-0">
+                <button type="submit" class="btn btn-sm btn-outline-danger">Log out</button>
+            </form>
+        </div>
+        {% endif %}
+    </div>
+</header>
+
+<main class="content-container {% block container_class %}{% endblock %}">
+    {% block page_head %}{% endblock %}
+    {% block content %}{% endblock %}
+</main>
+
+<div id="loadingOverlay" class="d-none">
+    <div class="spinner-border" style="color: var(--accent); width: 2.5rem; height: 2.5rem;" role="status"></div>
+    <span class="ms-3 fw-medium" style="color: var(--text-primary);">Processing...</span>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js" integrity="sha384-geWF76RCwLtnZ8qwWowPQNguL3RmwHVBC9FhGdlKrxdiJJigb/j/68SIy3Te4Bkz" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+function toggleMobileMenu() {
+    var menu = document.getElementById('mobileMenu');
+    if (menu) {
+        menu.classList.toggle('open');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('form[data-processing]').forEach(function (form) {
+        form.addEventListener('submit', function () {
+            var overlay = document.getElementById('loadingOverlay');
+            if (overlay) overlay.classList.remove('d-none');
+        });
+    });
+    document.querySelectorAll('a[data-processing]').forEach(function (link) {
+        link.addEventListener('click', function () {
+            var overlay = document.getElementById('loadingOverlay');
+            if (overlay) overlay.classList.remove('d-none');
+        });
+    });
+    document.querySelectorAll('[data-markdown]').forEach(function (el) {
+        var raw = el.textContent;
+        if (typeof marked !== 'undefined' && marked.parse) {
+            el.innerHTML = marked.parse(raw);
+        }
+    });
+});
+</script>
+</body>
+</html>

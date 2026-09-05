@@ -1,0 +1,299 @@
+{% extends "base.html" %}
+{% block title %}Edit: {{ article.topic }} | PlutioAI{% endblock %}
+{% block header %}Edit Article{% endblock %}
+{% block content %}
+<nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="{{ url_for('index') }}">Home</a></li>
+        <li class="breadcrumb-item"><a href="{{ url_for('view_articles') }}">Articles</a></li>
+        <li class="breadcrumb-item"><a href="{{ url_for('view_article', article_id=article.id) }}">{{ article.topic[:30] }}...</a></li>
+        <li class="breadcrumb-item active" aria-current="page">Edit</li>
+    </ol>
+</nav>
+
+<form method="post" class="needs-validation" novalidate>
+    <div class="row">
+        <div class="col-lg-9">
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <strong>Article Content</strong>
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button type="button" class="btn btn-outline-secondary" id="preview-btn" onclick="togglePreview()">
+                            👁️ Preview
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div id="editor-container">
+                        <textarea name="content" id="content" class="form-control font-monospace" rows="25" 
+                                  placeholder="Article content in Markdown..." required>{{ article.content }}</textarea>
+                    </div>
+                    <div id="preview-container" class="d-none">
+                        <div class="article-content border rounded p-3 bg-light" id="preview-content"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-3">
+            <div class="card mb-3">
+                <div class="card-header">
+                    <strong>Article Settings</strong>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label for="topic" class="form-label">Topic / Title</label>
+                        <input type="text" class="form-control" id="topic" name="topic" 
+                               value="{{ article.topic }}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="style" class="form-label">Style</label>
+                        <select name="style" id="style" class="form-select">
+                            <option value="blog" {% if article.style == 'blog' %}selected{% endif %}>Blog Post</option>
+                            <option value="news" {% if article.style == 'news' %}selected{% endif %}>News Article</option>
+                            <option value="opinion" {% if article.style == 'opinion' %}selected{% endif %}>Opinion/Editorial</option>
+                            <option value="technical" {% if article.style == 'technical' %}selected{% endif %}>Technical Deep-Dive</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="card bg-light mb-3">
+                <div class="card-header">
+                    <strong>Source</strong>
+                </div>
+                <div class="card-body">
+                    <p class="small text-muted mb-1">{{ article.podcast_title or 'Podcast' }}</p>
+                    <p class="small mb-0">{{ article.episode_title }}</p>
+                </div>
+            </div>
+            
+            <div class="d-grid gap-2">
+                <button type="submit" class="btn btn-primary">
+                    💾 Save Changes
+                </button>
+                <a href="{{ url_for('view_article', article_id=article.id) }}" class="btn btn-outline-secondary">
+                    Cancel
+                </a>
+            </div>
+        </div>
+    </div>
+</form>
+
+<!-- AI Refinement Section -->
+<div class="card mt-4">
+    <div class="card-header">
+        <strong>🤖 AI-Assisted Editing</strong>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small mb-3">
+            Describe what changes you'd like to make, and AI will refine the article for you.
+        </p>
+        <div class="mb-3">
+            <label for="ai-feedback" class="form-label fw-bold">Your Instructions</label>
+            <textarea id="ai-feedback" class="form-control" rows="3" 
+                      placeholder="E.g., 'Make the introduction more engaging', 'Add more technical details about encryption', 'Shorten the conclusion', 'Change the tone to be more formal', 'Add a section about best practices'..."></textarea>
+        </div>
+        <div class="mb-3">
+            <label class="form-label small text-muted">Quick suggestions:</label>
+            <div class="d-flex flex-wrap gap-1">
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setSuggestion('Make the introduction more engaging and hook the reader')">🎣 Better intro</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setSuggestion('Add more technical details and examples')">🔧 More technical</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setSuggestion('Make it more concise, reduce length by about 30%')">✂️ Shorten</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setSuggestion('Expand with more details and examples')">📝 Expand</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setSuggestion('Make the tone more professional and formal')">👔 More formal</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setSuggestion('Make it more conversational and accessible')">💬 More casual</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setSuggestion('Improve the conclusion with actionable takeaways')">🎯 Better conclusion</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="setSuggestion('Fix any grammar or spelling issues and improve clarity')">✍️ Polish writing</button>
+            </div>
+        </div>
+        <div class="d-flex gap-2">
+            <button type="button" class="btn btn-primary" id="refine-btn" onclick="refineWithAI(false)">
+                ✨ Generate Refined Version
+            </button>
+            <button type="button" class="btn btn-outline-primary" onclick="refineWithAI(true)">
+                ✨ Refine & Auto-Save
+            </button>
+        </div>
+        
+        <div id="refine-loading" class="text-center py-4 d-none">
+            <div class="spinner-border text-primary" role="status"></div>
+            <p class="mt-2 text-muted">AI is refining your article...</p>
+        </div>
+        
+        <div id="refine-result" class="mt-4 d-none">
+            <div class="alert alert-success d-flex align-items-center">
+                <strong>✓ Refined version ready!</strong>
+                <span id="refine-saved-badge" class="badge bg-success ms-2 d-none">Auto-saved</span>
+            </div>
+            <div class="d-flex gap-2 mb-3">
+                <button type="button" class="btn btn-success" onclick="applyRefinedContent()">
+                    📥 Apply to Editor
+                </button>
+                <button type="button" class="btn btn-outline-secondary" onclick="toggleRefinedPreview()">
+                    👁️ Toggle Preview
+                </button>
+            </div>
+            <div id="refined-preview" class="border rounded bg-light" style="max-height: 500px; overflow-y: auto;">
+                <div id="refined-preview-content" class="article-content p-3"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+#content {
+    font-size: 0.9rem;
+    line-height: 1.6;
+}
+.article-content {
+    min-height: 400px;
+    font-size: 1rem;
+    line-height: 1.7;
+}
+.article-content h1 { font-size: 1.75rem; margin-bottom: 1rem; }
+.article-content h2 { font-size: 1.4rem; margin-top: 1.5rem; margin-bottom: 0.75rem; }
+.article-content h3 { font-size: 1.2rem; margin-top: 1rem; }
+.article-content p { margin-bottom: 1rem; }
+.article-content ul, .article-content ol { margin-bottom: 1rem; padding-left: 1.5rem; }
+.article-content blockquote {
+    border-left: 4px solid #e94560;
+    padding-left: 1rem;
+    margin: 1rem 0;
+    font-style: italic;
+    color: #555;
+}
+.article-content code {
+    background: #e9ecef;
+    padding: 0.2rem 0.4rem;
+    border-radius: 3px;
+}
+.article-content pre {
+    background: #1a1a2e;
+    color: #e9e9e9;
+    padding: 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+}
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+let isPreviewMode = false;
+
+function togglePreview() {
+    isPreviewMode = !isPreviewMode;
+    const editorContainer = document.getElementById('editor-container');
+    const previewContainer = document.getElementById('preview-container');
+    const previewBtn = document.getElementById('preview-btn');
+    const content = document.getElementById('content').value;
+    
+    if (isPreviewMode) {
+        document.getElementById('preview-content').innerHTML = marked.parse(content);
+        editorContainer.classList.add('d-none');
+        previewContainer.classList.remove('d-none');
+        previewBtn.innerHTML = '✏️ Edit';
+    } else {
+        editorContainer.classList.remove('d-none');
+        previewContainer.classList.add('d-none');
+        previewBtn.innerHTML = '👁️ Preview';
+    }
+}
+
+// Auto-resize textarea (without bounce)
+const contentTextarea = document.getElementById('content');
+contentTextarea.addEventListener('input', function() {
+    // Only resize if content exceeds current height
+    if (this.scrollHeight > this.clientHeight) {
+        this.style.height = this.scrollHeight + 'px';
+    }
+});
+
+// Set initial height based on content
+if (contentTextarea.scrollHeight > 400) {
+    contentTextarea.style.height = contentTextarea.scrollHeight + 'px';
+}
+
+// AI Refinement functionality
+let refinedContent = '';
+
+function setSuggestion(text) {
+    document.getElementById('ai-feedback').value = text;
+}
+
+function refineWithAI(autoSave) {
+    const feedback = document.getElementById('ai-feedback').value.trim();
+    if (!feedback) {
+        alert('Please describe what changes you want to make');
+        return;
+    }
+    
+    const refineBtn = document.getElementById('refine-btn');
+    const loading = document.getElementById('refine-loading');
+    const result = document.getElementById('refine-result');
+    const savedBadge = document.getElementById('refine-saved-badge');
+    
+    // Show loading state
+    refineBtn.disabled = true;
+    loading.classList.remove('d-none');
+    result.classList.add('d-none');
+    
+    const formData = new FormData();
+    formData.append('feedback', feedback);
+    formData.append('auto_save', autoSave ? 'true' : 'false');
+    
+    fetch('{{ url_for("refine_article_with_ai", article_id=article.id) }}', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        loading.classList.add('d-none');
+        refineBtn.disabled = false;
+        
+        if (data.error) {
+            alert('Error: ' + data.error);
+            return;
+        }
+        
+        refinedContent = data.refined_content;
+        result.classList.remove('d-none');
+        
+        if (data.saved) {
+            savedBadge.classList.remove('d-none');
+            // Update the editor with saved content
+            document.getElementById('content').value = refinedContent;
+        } else {
+            savedBadge.classList.add('d-none');
+        }
+        
+        // Show preview
+        document.getElementById('refined-preview-content').innerHTML = marked.parse(refinedContent);
+        document.getElementById('refined-preview').classList.remove('d-none');
+    })
+    .catch(error => {
+        loading.classList.add('d-none');
+        refineBtn.disabled = false;
+        alert('Error: ' + error.message);
+    });
+}
+
+function applyRefinedContent() {
+    if (refinedContent) {
+        document.getElementById('content').value = refinedContent;
+        // If in preview mode, switch back to editor
+        if (isPreviewMode) {
+            togglePreview();
+        }
+        // Scroll to editor
+        document.getElementById('content').scrollIntoView({ behavior: 'smooth' });
+        alert('Refined content applied to editor. Don\'t forget to save!');
+    }
+}
+
+function toggleRefinedPreview() {
+    const preview = document.getElementById('refined-preview');
+    preview.classList.toggle('d-none');
+}
+</script>
+{% endblock %}
+

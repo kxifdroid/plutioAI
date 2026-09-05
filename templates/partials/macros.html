@@ -1,0 +1,64 @@
+{# Jinja reusable macros for PlutioAI #}
+
+{% macro page_header(title, subtitle=None, badge=None) %}
+<div class="page-header">
+    <div class="page-header__left">
+        <div class="d-flex align-items-center gap-2 flex-wrap mb-1">
+            <h1 class="page-header__title">{{ title }}</h1>
+            {% if badge %}{{ badge }}{% endif %}
+        </div>
+        {% if subtitle %}<p class="page-header__sub">{{ subtitle }}</p>{% endif %}
+    </div>
+    {% if caller is defined %}
+    <div class="page-header__actions">
+        {{ caller() }}
+    </div>
+    {% endif %}
+</div>
+{% endmacro %}
+
+{% macro stat_metric(label, value, hint=None) %}
+<div class="metric-stat">
+    <div class="metric-stat__label">{{ label }}</div>
+    <div class="metric-stat__value">{{ value }}</div>
+    {% if hint %}<div class="metric-stat__hint">{{ hint }}</div>{% endif %}
+</div>
+{% endmacro %}
+
+{% macro empty_state(title, description=None, action_url=None, action_text=None) %}
+<div class="empty-state">
+    <svg class="empty-state__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="8" y1="12" x2="16" y2="12"></line>
+    </svg>
+    <div class="empty-state__title">{{ title }}</div>
+    {% if description %}<div class="empty-state__desc">{{ description }}</div>{% endif %}
+    {% if action_url and action_text %}
+    <a href="{{ action_url }}" class="btn btn-primary btn-sm">{{ action_text }}</a>
+    {% endif %}
+</div>
+{% endmacro %}
+
+{% macro status_badge(status, label=None) %}
+{% set s = status|lower %}
+{% if s in ['complete', 'posted', 'published', 'active', 'success', 'connected'] %}
+<span class="badge bg-success">{{ label or status|capitalize }}</span>
+{% elif s in ['processing', 'queued', 'pending', 'waiting'] %}
+<span class="badge bg-warning text-dark">{{ label or status|capitalize }}</span>
+{% elif s in ['error', 'failed', 'expired'] %}
+<span class="badge bg-danger">{{ label or status|capitalize }}</span>
+{% elif s in ['audio'] %}
+<span class="badge badge-audio">Audio</span>
+{% elif s in ['youtube'] %}
+<span class="badge badge-youtube">YouTube</span>
+{% else %}
+<span class="badge bg-secondary">{{ label or status|capitalize }}</span>
+{% endif %}
+{% endmacro %}
+
+{% macro platform_badge(platform) %}
+{% set p = platform|lower %}
+<span class="badge bg-secondary border text-uppercase" style="font-size: 0.68rem; letter-spacing: 0.05em;">
+    {{ platform }}
+</span>
+{% endmacro %}
