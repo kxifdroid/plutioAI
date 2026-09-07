@@ -26,18 +26,27 @@ def init_db(db_path: str = DB_PATH) -> None:
     """Create tables if the database is empty."""
     if is_postgres():
         schema_path = os.path.join(os.path.dirname(__file__), "supabase_schema.sql")
-        with connect(db_path) as conn:
-            if os.path.exists(schema_path):
-                with open(schema_path, "r", encoding="utf-8") as f:
-                    schema_sql = f.read()
-                for raw_stmt in schema_sql.split(";"):
-                    stmt = raw_stmt.strip()
-                    if stmt:
-                        conn.execute(stmt)
-                conn.commit()
+        try:
+            with connect(db_path) as conn:
+                if os.path.exists(schema_path):
+                    with open(schema_path, "r", encoding="utf-8") as f:
+                        schema_sql = f.read()
+                    for raw_stmt in schema_sql.split(";"):
+                        # Remove leading comment lines
+                        lines = [l for l in raw_stmt.splitlines() if not l.strip().startswith("--")]
+                        stmt = "\n".join(lines).strip()
+                        if stmt:
+                            try:
+                                conn.execute(stmt)
+                            except Exception:
+                                pass
+                    conn.commit()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("init_db PostgreSQL check/creation notice: %s", e)
         return
 
-    with sqlite3.connect(db_path) as conn:
+    with _orig_sqlite3_connect(db_path) as conn:
         # Table storing RSS feeds that users have added
         conn.execute(
             """

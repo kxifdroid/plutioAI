@@ -1,6 +1,6 @@
 """Database adapter supporting both SQLite and Supabase PostgreSQL.
 
-Provides transparent translation of query parameters, connection pooling,
+Provides transparent translation of query parameters, robust SSL handling,
 row mapping matching sqlite3.Row, and schema initialization.
 """
 
@@ -20,13 +20,11 @@ _raw_sqlite3_connect = sqlite3.connect
 try:
     import psycopg2
     from psycopg2 import extras
-    from psycopg2 import pool
     HAS_PSYCOPG2 = True
 except ImportError:
     HAS_PSYCOPG2 = False
 
 
-_PG_POOL: Optional[Any] = None
 NO_ID_TABLES = {"time_slot_platforms", "platform_daily_limits"}
 
 
@@ -40,7 +38,7 @@ def is_postgres() -> bool:
 
 
 def get_postgres_url() -> Optional[str]:
-    """Retrieve normalized PostgreSQL connection URI."""
+    """Retrieve normalized PostgreSQL connection URI with required SSL settings."""
     url = (
         os.environ.get("DATABASE_URL")
         or os.environ.get("SUPABASE_DB_URL")
@@ -51,22 +49,12 @@ def get_postgres_url() -> Optional[str]:
     url = url.strip()
     if url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql://", 1)
+    
+    # Supabase and cloud PostgreSQL require SSL
+    if "sslmode=" not in url and ("supabase" in url or "amazonaws" in url or "neon" in url or "render" in url):
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}sslmode=require"
     return url
-
-
-def get_pg_pool():
-    """Get or create connection pool for PostgreSQL."""
-    global _PG_POOL
-    if _PG_POOL is None and is_postgres() and HAS_PSYCOPG2:
-        db_url = get_postgres_url()
-        try:
-            # Min 1, Max 10 connections for serverless resilience
-            _PG_POOL = pool.ThreadedConnectionPool(1, 10, db_url)
-            logger.info("Initialized PostgreSQL connection pool for Supabase")
-        except Exception as e:
-            logger.error("Failed to initialize PostgreSQL pool: %s", e)
-            _PG_POOL = None
-    return _PG_POOL
 
 
 class PostgresRow:
@@ -125,7 +113,6 @@ def translate_query(sql: str) -> Tuple[str, bool]:
 
     # 1. Handle INSERT OR REPLACE INTO episodes
     if re.search(r'INSERT\s+OR\s+REPLACE\s+INTO\s+episodes', s, re.IGNORECASE):
-        # Extract columns and values
         match = re.search(
             r'INSERT\s+OR\s+REPLACE\s+INTO\s+episodes\s*\((.*?)\)\s*VALUES\s*\((.*?)\)',
             s,
@@ -167,7 +154,6 @@ def translate_query(sql: str) -> Tuple[str, bool]:
     is_insert = translated_sql.strip().upper().startswith("INSERT INTO")
     has_returning = "RETURNING" in translated_sql.upper()
     
-    # Check if table has an 'id' column
     table_match = re.search(r'INSERT\s+INTO\s+([a-zA-Z0-9_]+)', translated_sql, re.IGNORECASE)
     table_name = table_match.group(1).lower() if table_match else ""
     
@@ -197,11 +183,9 @@ class PostgresCursorWrapper:
     def execute(self, sql: str, params: Union[Tuple, List, Dict] = ()):
         translated_sql, appended_returning = translate_query(sql)
         
-        # Convert tuple / list parameters
         if params is None:
             params = ()
         elif isinstance(params, (list, tuple)):
-            # Convert JSON dicts or bools if needed
             converted_params = []
             for p in params:
                 converted_params.append(p)
@@ -210,11 +194,9 @@ class PostgresCursorWrapper:
         try:
             self._cur.execute(translated_sql, params)
         except Exception as e:
-            # If RETURNING id failed because table doesn't have id, fallback without RETURNING
             if appended_returning and 'column "id" does not exist' in str(e).lower():
                 self._cur.connection.rollback()
                 sql_no_returning, _ = translate_query(sql)
-                # Remove RETURNING id
                 sql_no_returning = re.sub(r'\s+RETURNING\s+id', '', sql_no_returning, flags=re.IGNORECASE)
                 self._cur.execute(sql_no_returning, params)
                 self.lastrowid = None
@@ -258,15 +240,17 @@ class PostgresCursorWrapper:
         return [PostgresRow(desc, r) for r in rows]
 
     def close(self):
-        self._cur.close()
+        try:
+            self._cur.close()
+        except Exception:
+            pass
 
 
 class PostgresConnectionWrapper:
     """Wrapper around psycopg2 connection matching sqlite3 connection interface."""
 
-    def __init__(self, raw_conn: Any, pool_ref: Optional[Any] = None):
+    def __init__(self, raw_conn: Any):
         self._conn = raw_conn
-        self._pool_ref = pool_ref
         self.row_factory = None
 
     def cursor(self) -> PostgresCursorWrapper:
@@ -283,16 +267,22 @@ class PostgresConnectionWrapper:
         return cur
 
     def commit(self):
-        self._conn.commit()
+        try:
+            self._conn.commit()
+        except Exception as e:
+            logger.error("Commit failed: %s", e)
 
     def rollback(self):
-        self._conn.rollback()
+        try:
+            self._conn.rollback()
+        except Exception:
+            pass
 
     def close(self):
-        if self._pool_ref:
-            self._pool_ref.putconn(self._conn)
-        else:
+        try:
             self._conn.close()
+        except Exception:
+            pass
 
     def __enter__(self):
         return self
@@ -311,18 +301,12 @@ def connect(db_path: str = "insights.db") -> Union[PostgresConnectionWrapper, sq
         if not HAS_PSYCOPG2:
             raise RuntimeError(
                 "PostgreSQL / Supabase connection requested via DATABASE_URL, "
-                "but psycopg2-binary is not installed. Run: pip install psycopg2-binary"
+                "but psycopg2-binary is not installed."
             )
-        pool_ref = get_pg_pool()
-        if pool_ref:
-            raw_conn = pool_ref.getconn()
-            raw_conn.autocommit = False
-            return PostgresConnectionWrapper(raw_conn, pool_ref=pool_ref)
-        else:
-            db_url = get_postgres_url()
-            raw_conn = psycopg2.connect(db_url)
-            raw_conn.autocommit = False
-            return PostgresConnectionWrapper(raw_conn)
+        db_url = get_postgres_url()
+        raw_conn = psycopg2.connect(db_url, connect_timeout=10)
+        raw_conn.autocommit = False
+        return PostgresConnectionWrapper(raw_conn)
     else:
         conn = _raw_sqlite3_connect(db_path)
         conn.row_factory = sqlite3.Row

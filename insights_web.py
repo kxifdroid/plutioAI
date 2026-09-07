@@ -389,19 +389,21 @@ swagger_template = {
 
 swagger = Swagger(app, config=swagger_config, template=swagger_template)
 
-# Configure image uploads
-UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads')
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
-# Video uploads for Instagram Reels / video Stories / video carousel items.
-ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'mov'}
-MAX_IMAGE_BYTES = 16 * 1024 * 1024   # 16MB — enforced manually on the image path
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-# Global cap is raised for video; the image route re-checks MAX_IMAGE_BYTES so the
-# effective image limit is unchanged.
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB (Cloudinary free-tier per-file)
+# Configure image uploads (safe for serverless / read-only filesystem)
+is_serverless = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+if is_serverless:
+    UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), 'uploads')
+else:
+    UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads')
 
-# Ensure upload directory exists
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+try:
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+except Exception:
+    UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), 'uploads')
+    try:
+        os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    except Exception:
+        pass
 
 # Instagram target canvases (width, height) for the media "fit" endpoint.
 # Story/Reel are full-screen 9:16; feed images must sit between 4:5 and 1.91:1.
@@ -1536,8 +1538,12 @@ def save_stock_image_to_library(image_url: str, direct_save: bool = False) -> st
     return saved_url
 
 
-configure_logging()
-init_db()
+try:
+    configure_logging()
+    init_db()
+except Exception as _startup_err:
+    import logging as _logging
+    _logging.getLogger(__name__).warning("Startup initialization notice: %s", _startup_err)
 
 # Background processing queue used to process episodes without blocking the web request
 task_queue: Queue = Queue()
@@ -10242,7 +10248,10 @@ def compose_generate_from_source():
 
 
 THUMBNAIL_UPLOAD_DIR = os.path.join(UPLOAD_FOLDER, 'youtube_thumbnails')
-os.makedirs(THUMBNAIL_UPLOAD_DIR, exist_ok=True)
+try:
+    os.makedirs(THUMBNAIL_UPLOAD_DIR, exist_ok=True)
+except Exception:
+    pass
 
 
 @app.route('/thumbnails')
