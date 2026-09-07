@@ -485,7 +485,8 @@ def _signups_allowed() -> bool:
     try:
         if count_users() == 0:
             return True
-    except sqlite3.OperationalError:
+    except Exception as e:
+        app.logger.warning("count_users check failed, defaulting to allow signup: %s", e)
         return True
     return os.environ.get("ALLOW_SIGNUP", "").lower() == "true"
 
@@ -709,8 +710,9 @@ def signup():
                     username,
                     generate_password_hash(password, method="pbkdf2:sha256"),
                 )
-            except sqlite3.IntegrityError:
-                error = "That username is already taken."
+            except Exception as e:
+                app.logger.warning("create_user failed: %s", e)
+                error = "That username is already taken or registration failed."
             else:
                 session.clear()
                 session["user_id"] = user_id
@@ -5618,7 +5620,8 @@ def schedule_debug():
     
     # Get pending scheduled posts
     from database import DB_PATH as _DB_PATH
-    with sqlite3.connect(_DB_PATH) as conn:
+    from db_adapter import connect as _db_connect
+    with _db_connect(_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         cur = conn.execute(
             """

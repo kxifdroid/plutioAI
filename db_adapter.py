@@ -299,14 +299,20 @@ def connect(db_path: str = "insights.db") -> Union[PostgresConnectionWrapper, sq
     """Return database connection: Supabase PostgreSQL if configured, else SQLite."""
     if is_postgres():
         if not HAS_PSYCOPG2:
-            raise RuntimeError(
-                "PostgreSQL / Supabase connection requested via DATABASE_URL, "
-                "but psycopg2-binary is not installed."
-            )
-        db_url = get_postgres_url()
-        raw_conn = psycopg2.connect(db_url, connect_timeout=10)
-        raw_conn.autocommit = False
-        return PostgresConnectionWrapper(raw_conn)
+            logger.warning("psycopg2-binary not installed, falling back to SQLite")
+            conn = _raw_sqlite3_connect(db_path)
+            conn.row_factory = sqlite3.Row
+            return conn
+        try:
+            db_url = get_postgres_url()
+            raw_conn = psycopg2.connect(db_url, connect_timeout=10)
+            raw_conn.autocommit = False
+            return PostgresConnectionWrapper(raw_conn)
+        except Exception as e:
+            logger.error("PostgreSQL connection failed (%s). Falling back to SQLite.", e)
+            conn = _raw_sqlite3_connect(db_path)
+            conn.row_factory = sqlite3.Row
+            return conn
     else:
         conn = _raw_sqlite3_connect(db_path)
         conn.row_factory = sqlite3.Row
