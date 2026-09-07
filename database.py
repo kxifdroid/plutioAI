@@ -6,17 +6,37 @@ web interface. Each function wraps a query so callers don't need to know SQL.
 
 from __future__ import annotations
 
+import os
 import json
 import re
 import sqlite3
 from typing import Dict, Iterable, Optional, List
 from datetime import datetime
 
+from db_adapter import connect, is_postgres, PostgresRow, get_postgres_url
+
+# Override sqlite3.connect in this module so all queries route through db_adapter
+_orig_sqlite3_connect = sqlite3.connect
+sqlite3.connect = connect
+
 DB_PATH = "insights.db"
 
 
 def init_db(db_path: str = DB_PATH) -> None:
-    """Create tables if the database file is empty."""
+    """Create tables if the database is empty."""
+    if is_postgres():
+        schema_path = os.path.join(os.path.dirname(__file__), "supabase_schema.sql")
+        with connect(db_path) as conn:
+            if os.path.exists(schema_path):
+                with open(schema_path, "r", encoding="utf-8") as f:
+                    schema_sql = f.read()
+                for raw_stmt in schema_sql.split(";"):
+                    stmt = raw_stmt.strip()
+                    if stmt:
+                        conn.execute(stmt)
+                conn.commit()
+        return
+
     with sqlite3.connect(db_path) as conn:
         # Table storing RSS feeds that users have added
         conn.execute(
