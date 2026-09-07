@@ -261,6 +261,11 @@ def run_brief(brief_id: int, *, trigger: str = "manual", run_id: int | None = No
         creative = _creative_context(brief)
         research_attempted = bool(brief.get("use_web_search") or brief.get("use_saved_sources"))
 
+        is_local = (
+            getattr(insights, "LLM_PROVIDER", "openai") in ("local", "ollama")
+            or not os.getenv("OPENAI_API_KEY")
+        )
+
         # ── Research ─────────────────────────────────────────────────────
         rres = None
         if research_attempted:
@@ -273,7 +278,7 @@ def run_brief(brief_id: int, *, trigger: str = "manual", run_id: int | None = No
                 use_saved_sources=bool(brief.get("use_saved_sources")),
                 max_items=max_sources,
             )
-            rres = research_engine.run_research(rbrief)
+            rres = research_engine.run_research(rbrief, use_local=is_local)
             warnings.extend(rres.warnings)
             query_plan = rres.query_plan
             sources_found = len(rres.items)
@@ -294,11 +299,15 @@ def run_brief(brief_id: int, *, trigger: str = "manual", run_id: int | None = No
                     research_text,
                     f"Why this source is relevant: {item.why_relevant}" if item.why_relevant else "",
                 )
+                # Only force source_url into copy if it's an actual external web article, not a legacy database episode
+                source_url_for_post = item.url if item.origin == "web" else None
+                image_for_post = item.image_url if item.origin == "web" else None
                 try:
                     generated = insights.generate_posts_from_text(
                         text=item.text, platforms=platforms, tone=tone,
                         topic=item.title, posts_per_platform=ppp,
-                        extra_context=ctx, source_url=item.url,
+                        extra_context=ctx, source_url=source_url_for_post,
+                        use_local=is_local,
                     )
                 except Exception as exc:
                     logger.exception("post generation failed for %s", item.url)
@@ -308,30 +317,35 @@ def run_brief(brief_id: int, *, trigger: str = "manual", run_id: int | None = No
                 ids = _persist_posts(
                     generated, platforms,
                     source_label=(item.url or brief["name"]),
-                    image_url=item.image_url, brief_id=brief_id, run_id=run_id,
+                    image_url=image_for_post, brief_id=brief_id, run_id=run_id,
                     remaining=max_drafts - len(post_ids),
                 )
                 post_ids.extend(ids)
                 if ids:
                     sources_used += 1
-        elif want_posts and not items and not research_attempted:
-            # Pure prompt brief (no sourcing configured): draft straight from the prompt.
+
+        # Fallback: if no posts were generated from sources (e.g. no web search keys or no relevant sources),
+        # generate posts directly from the user's brief prompt/instructions.
+        if want_posts and not post_ids:
             try:
+                logger.info("Generating posts directly from brief prompt for brief %s", brief_id)
                 generated = insights.generate_posts_from_prompt(
-                    prompt=instructions, platforms=platforms, tone=tone,
-                    posts_per_platform=ppp, extra_context=creative or None,
+                    prompt=instructions or brief["name"],
+                    platforms=platforms,
+                    tone=tone,
+                    posts_per_platform=ppp,
+                    extra_context=creative or None,
+                    use_local=is_local,
                 )
                 post_ids.extend(_persist_posts(
                     generated, platforms, source_label=brief["name"],
                     image_url=None, brief_id=brief_id, run_id=run_id,
                     remaining=max_drafts,
                 ))
-            except Exception:
-                logger.exception("prompt-only post generation failed for brief %s", brief_id)
-        elif want_posts and not items and research_attempted:
-            # Research ran but surfaced nothing new (e.g. all duplicates): skip
-            # rather than emit repetitive generic posts on every scheduled run.
-            warnings.append("no_new_sources")
+            except Exception as exc:
+                logger.exception("prompt-based post generation failed for brief %s: %s", brief_id, exc)
+                gen_errors += 1
+                last_gen_error = str(exc)
 
         # ── Long-form articles ───────────────────────────────────────────
         if want_articles and items:
@@ -350,6 +364,7 @@ def run_brief(brief_id: int, *, trigger: str = "manual", run_id: int | None = No
                         episode_title=item.title,
                         style=brief.get("article_style") or "blog",
                         extra_context=ctx, is_text_source=True,
+                        use_local=is_local,
                     )
                 except Exception as exc:
                     logger.exception("article generation failed for %s", item.url)
@@ -365,6 +380,33 @@ def run_brief(brief_id: int, *, trigger: str = "manual", run_id: int | None = No
                 )
                 article_ids.append(aid)
                 sources_used += 1
+
+        # Fallback: if no articles were generated from sources, generate from the brief instructions
+        if want_articles and not article_ids:
+            try:
+                logger.info("Generating article directly from brief prompt for brief %s", brief_id)
+                content = insights.generate_article(
+                    transcript=instructions,
+                    summary=instructions[:500],
+                    topic=(instructions[:200] or brief["name"]),
+                    podcast_title="Content Agent",
+                    episode_title=brief["name"],
+                    style=brief.get("article_style") or "blog",
+                    extra_context=creative,
+                    is_text_source=True,
+                    use_local=is_local,
+                )
+                if content:
+                    aid = database.add_article(
+                        None, (instructions[:200] or brief["name"]),
+                        brief.get("article_style") or "blog", content,
+                        brief_id=brief_id, brief_run_id=run_id, source_type="agent",
+                    )
+                    article_ids.append(aid)
+            except Exception as exc:
+                logger.exception("prompt-based article generation failed for brief %s: %s", brief_id, exc)
+                gen_errors += 1
+                last_gen_error = str(exc)
 
         # If sources were found but every generation attempt failed (e.g. a bad
         # model/provider config), surface it rather than reporting a silent

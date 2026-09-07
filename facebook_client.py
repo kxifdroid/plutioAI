@@ -23,7 +23,7 @@ FACEBOOK_OAUTH_URL = f"https://www.facebook.com/{GRAPH_API_VERSION}/dialog/oauth
 
 FACEBOOK_SCOPES = os.environ.get(
     "FACEBOOK_SCOPES",
-    "pages_manage_posts,pages_read_engagement,pages_show_list,business_management",
+    "pages_show_list,pages_read_engagement,pages_manage_posts",
 )
 
 
@@ -36,10 +36,11 @@ class FacebookClient:
         app_secret: str | None = None,
         redirect_uri: str | None = None,
     ):
-        self.app_id = app_id or os.environ.get("FACEBOOK_APP_ID")
-        self.app_secret = app_secret or os.environ.get("FACEBOOK_APP_SECRET")
+        self.app_id = app_id or os.environ.get("FACEBOOK_APP_ID") or os.environ.get("META_APP_ID")
+        self.app_secret = app_secret or os.environ.get("FACEBOOK_APP_SECRET") or os.environ.get("META_APP_SECRET")
         self.redirect_uri = redirect_uri or os.environ.get(
-            "FACEBOOK_REDIRECT_URI", "http://localhost:5001/facebook/callback"
+            "FACEBOOK_REDIRECT_URI",
+            os.environ.get("META_REDIRECT_URI", "http://localhost:5001/facebook/callback")
         )
 
     def is_configured(self) -> bool:

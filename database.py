@@ -1529,6 +1529,7 @@ def get_social_post(post_id: int, db_path: str = DB_PATH) -> Optional[sqlite3.Ro
 def delete_social_post(post_id: int, db_path: str = DB_PATH) -> None:
     """Delete a social post by its id."""
     with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM scheduled_posts WHERE social_post_id = ?", (post_id,))
         conn.execute("DELETE FROM social_posts WHERE id = ?", (post_id,))
         conn.commit()
 
@@ -1539,6 +1540,10 @@ def delete_social_posts_bulk(post_ids: List[int], db_path: str = DB_PATH) -> int
         return 0
     placeholders = ",".join("?" * len(post_ids))
     with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            f"DELETE FROM scheduled_posts WHERE social_post_id IN ({placeholders})",
+            post_ids,
+        )
         cur = conn.execute(
             f"DELETE FROM social_posts WHERE id IN ({placeholders})",
             post_ids,
@@ -3726,6 +3731,7 @@ def delete_standalone_post(post_id: int, db_path: str = DB_PATH) -> None:
         post_id: The post ID to delete
     """
     with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM scheduled_posts WHERE standalone_post_id = ?", (post_id,))
         conn.execute("DELETE FROM standalone_posts WHERE id = ?", (post_id,))
         conn.commit()
 
@@ -3743,6 +3749,10 @@ def delete_standalone_posts_bulk(post_ids: List[int], db_path: str = DB_PATH) ->
         return 0
     placeholders = ",".join("?" * len(post_ids))
     with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            f"DELETE FROM scheduled_posts WHERE standalone_post_id IN ({placeholders})",
+            post_ids,
+        )
         cur = conn.execute(
             f"DELETE FROM standalone_posts WHERE id IN ({placeholders})",
             post_ids,
@@ -5219,8 +5229,43 @@ def list_brief_runs(brief_id: int, limit: int = 20, db_path: str = DB_PATH) -> L
         return cur.fetchall()
 
 
+def cleanup_stale_brief_runs(max_age_minutes: int = 15, db_path: str = DB_PATH) -> int:
+    """Mark any abandoned 'running' runs as 'interrupted'."""
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.execute(
+            """
+            UPDATE content_brief_runs
+            SET status = 'interrupted',
+                finished_at = datetime('now'),
+                error_message = 'Run timed out or interrupted'
+            WHERE status = 'running'
+              AND (strftime('%s', 'now') - strftime('%s', started_at)) > (? * 60)
+            """,
+            (max_age_minutes,),
+        )
+        conn.commit()
+        return cur.rowcount
+
+
+def reset_all_running_brief_runs(db_path: str = DB_PATH) -> int:
+    """Mark all 'running' runs as 'interrupted' on server start."""
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.execute(
+            """
+            UPDATE content_brief_runs
+            SET status = 'interrupted',
+                finished_at = datetime('now'),
+                error_message = 'Interrupted by server restart'
+            WHERE status = 'running'
+            """
+        )
+        conn.commit()
+        return cur.rowcount
+
+
 def get_active_brief_run(brief_id: int, db_path: str = DB_PATH) -> Optional[sqlite3.Row]:
     """Return the brief's currently-running run, if any (concurrency guard)."""
+    cleanup_stale_brief_runs(max_age_minutes=15, db_path=db_path)
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         cur = conn.execute(

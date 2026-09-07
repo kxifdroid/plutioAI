@@ -9,11 +9,11 @@
 {# The one platform table: the chips here, the chip CSS and the JS tables in
    compose.html, and the Find & Replace badges all read from it. #}
 {% set PLATFORM_META = {
-    'linkedin':  {'label': 'LinkedIn',  'icon': '💼', 'color': '#0077B5', 'tint': 'rgba(0, 119, 181, 0.08)'},
-    'threads':   {'label': 'Threads',   'icon': '🧵', 'color': '#000000', 'tint': 'rgba(0, 0, 0, 0.06)'},
-    'twitter':   {'label': 'X',         'icon': '𝕏', 'color': '#1DA1F2', 'tint': 'rgba(29, 161, 242, 0.08)'},
-    'facebook':  {'label': 'Facebook',  'icon': '📘', 'color': '#1877F2', 'tint': 'rgba(24, 119, 242, 0.08)'},
-    'instagram': {'label': 'Instagram', 'icon': '📷', 'color': '#E4405F', 'tint': 'rgba(228, 64, 95, 0.08)'},
+    'linkedin':  {'label': 'LinkedIn',  'icon': '<i class="bi bi-linkedin" style="color: #0077B5;"></i>', 'color': '#0077B5', 'tint': 'rgba(0, 119, 181, 0.08)'},
+    'threads':   {'label': 'Threads',   'icon': '<i class="bi bi-threads" style="color: #000000;"></i>', 'color': '#000000', 'tint': 'rgba(0, 0, 0, 0.06)'},
+    'twitter':   {'label': 'X',         'icon': '<i class="bi bi-twitter-x" style="color: #000000;"></i>', 'color': '#1DA1F2', 'tint': 'rgba(29, 161, 242, 0.08)'},
+    'facebook':  {'label': 'Facebook',  'icon': '<i class="bi bi-facebook" style="color: #1877F2;"></i>', 'color': '#1877F2', 'tint': 'rgba(24, 119, 242, 0.08)'},
+    'instagram': {'label': 'Instagram', 'icon': '<i class="bi bi-instagram" style="color: #E4405F;"></i>', 'color': '#E4405F', 'tint': 'rgba(228, 64, 95, 0.08)'},
 } %}
 {% set PLATFORM_ORDER = ['linkedin', 'threads', 'twitter', 'facebook', 'instagram'] %}
 
@@ -67,8 +67,8 @@
                                 </button>
                                 <ul class="dropdown-menu dropdown-menu-end">
                                     {% for entry in group.platforms %}
-                                    <li><button class="dropdown-item" type="button" onclick="postNowFromCard(this, {{ entry.id }}, '{{ entry.platform }}', {{ entry.account_id or 'null' }})">
-                                        {{ PLATFORM_META.get(entry.platform, {}).get('icon', '📱') }} Post to {{ entry.account_label or PLATFORM_META.get(entry.platform, {}).get('label', entry.platform|capitalize) }} now
+                                    <li><button class="dropdown-item d-flex align-items-center gap-2" type="button" onclick="postNowFromCard(this, {{ entry.id }}, '{{ entry.platform }}', {{ entry.account_id or 'null' }})">
+                                        {{ PLATFORM_META.get(entry.platform, {}).get('icon', '📱') | safe }} Post to {{ entry.account_label or PLATFORM_META.get(entry.platform, {}).get('label', entry.platform|capitalize) }} now
                                     </button></li>
                                     {% endfor %}
                                     {% if group.platforms | length > 1 %}
@@ -83,8 +83,8 @@
                                 </button>
                                 <ul class="dropdown-menu dropdown-menu-end">
                                     {% for entry in group.platforms %}
-                                    <li><button class="dropdown-item" type="button" onclick="openScheduleModal({{ entry.id }}, 'standalone', '{{ entry.platform }}')">
-                                        {{ PLATFORM_META.get(entry.platform, {}).get('icon', '📱') }} Schedule for {{ entry.account_label or PLATFORM_META.get(entry.platform, {}).get('label', entry.platform|capitalize) }}
+                                    <li><button class="dropdown-item d-flex align-items-center gap-2" type="button" onclick="openScheduleModal({{ entry.id }}, 'standalone', '{{ entry.platform }}')">
+                                        {{ PLATFORM_META.get(entry.platform, {}).get('icon', '📱') | safe }} Schedule for {{ entry.account_label or PLATFORM_META.get(entry.platform, {}).get('label', entry.platform|capitalize) }}
                                     </button></li>
                                     {% endfor %}
                                     {% if group.platforms | length > 1 %}
@@ -117,7 +117,7 @@
                                 <button type="button" class="chip-toggle" onclick="togglePostPlatform(this, '{{ platform }}')"
                                         title="{% if entry %}Remove this post from {{ name }}{% else %}Also post this to {{ name }}{% endif %}">
                                     <span class="chip-box">{% if entry %}✓{% endif %}</span>
-                                    <span class="chip-icon">{{ meta.icon }}</span>
+                                    <span class="chip-icon">{{ meta.icon | safe }}</span>
                                     {# X's wordmark is its name, so printing both reads as "𝕏 X". #}
                                     {% if platform != 'twitter' or target.show_label %}<span class="chip-name">{{ name }}</span>{% endif %}
                                 </button>

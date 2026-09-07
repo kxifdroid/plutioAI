@@ -168,16 +168,22 @@ def _loads_json(text: str):
 
 
 def _relevant(blob: str, topic_tokens: set, kw_norms: list) -> bool:
-    """Lenient prefilter (favor recall; scoring/selection handles precision).
+    """Check relevance against topic and keywords.
 
     Keeps a candidate if any keyword (normalized) appears in the blob, or the blob
-    shares at least one content token with the topic.
+    shares a meaningful number of topic content tokens.
     """
     if kw_norms:
         blob_norm = _norm_alnum(blob)
         if any(k and k in blob_norm for k in kw_norms):
             return True
-    return bool(topic_tokens & _tokens(blob))
+    blob_toks = _tokens(blob)
+    overlap = topic_tokens & blob_toks
+    if len(topic_tokens) <= 3:
+        return len(overlap) >= 1
+    # For longer topic prompts, require at least 3 distinct topic tokens or 15% overlap
+    min_required = min(4, max(2, int(len(topic_tokens) * 0.15)))
+    return len(overlap) >= min_required
 
 
 # ── Stage 1: query planning ─────────────────────────────────────────────────

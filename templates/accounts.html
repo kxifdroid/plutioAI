@@ -92,12 +92,30 @@
 <div class="account-platform" data-platform="{{ entry.platform }}">
     <div class="account-platform-head">
         <div class="account-platform-name">
-            {{ entry.name }}
+            {% if entry.platform == 'linkedin' %}
+                <i class="bi bi-linkedin" style="color: #0077B5; font-size: 1.25rem;"></i>
+            {% elif entry.platform == 'threads' %}
+                <i class="bi bi-threads" style="color: #000000; font-size: 1.25rem;"></i>
+            {% elif entry.platform == 'twitter' %}
+                <i class="bi bi-twitter-x" style="color: #000000; font-size: 1.25rem;"></i>
+            {% elif entry.platform == 'facebook' %}
+                <i class="bi bi-facebook" style="color: #1877F2; font-size: 1.25rem;"></i>
+            {% elif entry.platform == 'instagram' %}
+                <i class="bi bi-instagram" style="color: #E4405F; font-size: 1.25rem;"></i>
+            {% elif entry.platform == 'youtube' %}
+                <i class="bi bi-youtube" style="color: #FF0000; font-size: 1.25rem;"></i>
+            {% elif entry.platform == 'tiktok' %}
+                <i class="bi bi-tiktok" style="color: #000000; font-size: 1.25rem;"></i>
+            {% else %}
+                <i class="bi bi-share" style="font-size: 1.25rem;"></i>
+            {% endif %}
+            <span>{{ entry.name }}</span>
             <span class="badge bg-secondary">{{ entry.accounts | length }}</span>
         </div>
         <div>
             {% if entry.configured %}
-            <a class="btn btn-sm btn-outline-primary" href="{{ entry.connect_url }}">
+            <a class="btn btn-sm btn-outline-primary d-inline-flex align-items-center gap-1" href="{{ entry.connect_url }}">
+                <i class="bi bi-plus-lg"></i>
                 {% if entry.accounts %}Connect another{% else %}Connect{% endif %}
             </a>
             {% else %}
@@ -115,11 +133,34 @@
             {% if account.avatar_url %}
             <img src="{{ account.avatar_url }}" alt="" class="account-avatar">
             {% else %}
-            👤
+            {% if entry.platform == 'linkedin' %}
+                <i class="bi bi-linkedin" style="color: #0077B5;"></i>
+            {% elif entry.platform == 'threads' %}
+                <i class="bi bi-threads" style="color: #000000;"></i>
+            {% elif entry.platform == 'twitter' %}
+                <i class="bi bi-twitter-x" style="color: #000000;"></i>
+            {% elif entry.platform == 'facebook' %}
+                <i class="bi bi-facebook" style="color: #1877F2;"></i>
+            {% elif entry.platform == 'instagram' %}
+                <i class="bi bi-instagram" style="color: #E4405F;"></i>
+            {% else %}
+                <i class="bi bi-person-fill"></i>
+            {% endif %}
             {% endif %}
         </div>
         <div class="account-identity">
             <div class="account-name">
+                {% if entry.platform == 'linkedin' %}
+                    <i class="bi bi-linkedin me-1" style="color: #0077B5; font-size: 0.95rem;"></i>
+                {% elif entry.platform == 'threads' %}
+                    <i class="bi bi-threads me-1" style="color: #000000; font-size: 0.95rem;"></i>
+                {% elif entry.platform == 'twitter' %}
+                    <i class="bi bi-twitter-x me-1" style="color: #000000; font-size: 0.95rem;"></i>
+                {% elif entry.platform == 'facebook' %}
+                    <i class="bi bi-facebook me-1" style="color: #1877F2; font-size: 0.95rem;"></i>
+                {% elif entry.platform == 'instagram' %}
+                    <i class="bi bi-instagram me-1" style="color: #E4405F; font-size: 0.95rem;"></i>
+                {% endif %}
                 <span class="account-label-text">{{ account.label }}</span>
                 {% if account.is_default %}
                 <span class="badge bg-success default-badge">Default</span>

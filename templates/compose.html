@@ -465,7 +465,7 @@
     <div class="col-md mb-3 mb-md-0">
         <div class="card h-100">
             <div class="card-header d-flex justify-content-between align-items-center" >
-                <strong>💼 LinkedIn</strong>
+                <strong class="d-flex align-items-center gap-2"><i class="bi bi-linkedin" style="color: #0077B5; font-size: 1.15rem;"></i> LinkedIn</strong>
                 <span id="linkedin-status-badge" class="badge bg-secondary">Checking...</span>
             </div>
             <div class="card-body py-2">
@@ -481,7 +481,7 @@
     <div class="col-md mb-3 mb-md-0">
         <div class="card h-100">
             <div class="card-header d-flex justify-content-between align-items-center" >
-                <strong>🧵 Threads</strong>
+                <strong class="d-flex align-items-center gap-2"><i class="bi bi-threads" style="color: #000000; font-size: 1.15rem;"></i> Threads</strong>
                 <span id="threads-status-badge" class="badge bg-secondary">Checking...</span>
             </div>
             <div class="card-body py-2">
@@ -497,7 +497,7 @@
     <div class="col-md mb-3 mb-md-0">
         <div class="card h-100">
             <div class="card-header d-flex justify-content-between align-items-center" >
-                <strong>📘 Facebook</strong>
+                <strong class="d-flex align-items-center gap-2"><i class="bi bi-facebook" style="color: #1877F2; font-size: 1.15rem;"></i> Facebook</strong>
                 <span id="facebook-status-badge" class="badge bg-secondary">Checking...</span>
             </div>
             <div class="card-body py-2">
@@ -513,7 +513,7 @@
     <div class="col-md mb-3 mb-md-0">
         <div class="card h-100">
             <div class="card-header d-flex justify-content-between align-items-center" >
-                <strong>𝕏 Twitter</strong>
+                <strong class="d-flex align-items-center gap-2"><i class="bi bi-twitter-x" style="color: #000000; font-size: 1.15rem;"></i> X / Twitter</strong>
                 <span id="twitter-status-badge" class="badge bg-secondary">Checking...</span>
             </div>
             <div class="card-body py-2">
@@ -529,7 +529,7 @@
     <div class="col-md">
         <div class="card h-100">
             <div class="card-header d-flex justify-content-between align-items-center" >
-                <strong>📷 Instagram</strong>
+                <strong class="d-flex align-items-center gap-2"><i class="bi bi-instagram" style="color: #E4405F; font-size: 1.15rem;"></i> Instagram</strong>
                 <span id="instagram-status-badge" class="badge bg-secondary">Checking...</span>
             </div>
             <div class="card-body py-2">
@@ -845,30 +845,30 @@
             <div class="col-md-8">
                 <label class="form-label fw-bold mb-3">Select Platforms</label>
                 <div class="d-flex flex-wrap gap-3" id="platform-checkboxes">
-                    <label class="platform-checkbox-box selected" data-platform="linkedin">
+                    <label class="platform-checkbox-box selected d-inline-flex align-items-center gap-1" data-platform="linkedin">
                         <span class="check-indicator"></span>
                         <input type="checkbox" class="d-none" value="linkedin" id="platform-linkedin" checked>
-                        💼 LinkedIn
+                        <i class="bi bi-linkedin" style="color: #0077B5;"></i> LinkedIn
                     </label>
-                    <label class="platform-checkbox-box selected" data-platform="threads">
+                    <label class="platform-checkbox-box selected d-inline-flex align-items-center gap-1" data-platform="threads">
                         <span class="check-indicator"></span>
                         <input type="checkbox" class="d-none" value="threads" id="platform-threads" checked>
-                        🧵 Threads
+                        <i class="bi bi-threads" style="color: #000000;"></i> Threads
                     </label>
-                    <label class="platform-checkbox-box selected" data-platform="twitter">
+                    <label class="platform-checkbox-box selected d-inline-flex align-items-center gap-1" data-platform="twitter">
                         <span class="check-indicator"></span>
                         <input type="checkbox" class="d-none" value="twitter" id="platform-twitter" checked>
-                        𝕏 Twitter
+                        <i class="bi bi-twitter-x" style="color: #000000;"></i> Twitter
                     </label>
-                    <label class="platform-checkbox-box selected" data-platform="facebook">
+                    <label class="platform-checkbox-box selected d-inline-flex align-items-center gap-1" data-platform="facebook">
                         <span class="check-indicator"></span>
                         <input type="checkbox" class="d-none" value="facebook" id="platform-facebook" checked>
-                        📘 Facebook
+                        <i class="bi bi-facebook" style="color: #1877F2;"></i> Facebook
                     </label>
-                    <label class="platform-checkbox-box" data-platform="instagram" title="Instagram posts require an image">
+                    <label class="platform-checkbox-box d-inline-flex align-items-center gap-1" data-platform="instagram" title="Instagram posts require an image">
                         <span class="check-indicator"></span>
                         <input type="checkbox" class="d-none" value="instagram" id="platform-instagram">
-                        📷 Instagram
+                        <i class="bi bi-instagram" style="color: #E4405F;"></i> Instagram
                     </label>
                 </div>
                 {# Accounts, only where a platform has more than one. The copy is
@@ -1080,7 +1080,7 @@
                 <button type="button" class="chip-toggle" onclick="toggleNewPostPlatform(this)"
                         title="{{ name }}{% if platform == 'instagram' %}, needs an image before it can publish{% endif %}">
                     <span class="chip-box">{% if on %}✓{% endif %}</span>
-                    <span class="chip-icon">{{ meta.icon }}</span>
+                    <span class="chip-icon">{{ meta.icon | safe }}</span>
                     {% if platform != 'twitter' or target.show_label %}<span class="chip-name">{{ name }}</span>{% endif %}
                 </button>
             </span>
@@ -1316,23 +1316,23 @@
             </div>
             <div class="modal-footer justify-content-center flex-wrap gap-2">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" onclick="queueAllUnscheduled('linkedin')">
-                    💼 Queue LinkedIn
+                <button type="button" class="btn btn-primary d-inline-flex align-items-center gap-1" onclick="queueAllUnscheduled('linkedin')">
+                    <i class="bi bi-linkedin"></i> Queue LinkedIn
                 </button>
-                <button type="button" class="btn btn-dark" onclick="queueAllUnscheduled('threads')">
-                    🧵 Queue Threads
+                <button type="button" class="btn btn-dark d-inline-flex align-items-center gap-1" onclick="queueAllUnscheduled('threads')">
+                    <i class="bi bi-threads"></i> Queue Threads
                 </button>
-                <button type="button" class="btn" style="background-color: #1877F2; color: white;" onclick="queueAllUnscheduled('facebook')">
-                    📘 Queue Facebook
+                <button type="button" class="btn d-inline-flex align-items-center gap-1" style="background-color: #1877F2; color: white;" onclick="queueAllUnscheduled('facebook')">
+                    <i class="bi bi-facebook"></i> Queue Facebook
                 </button>
-                <button type="button" class="btn" style="background-color: #1DA1F2; color: white;" onclick="queueAllUnscheduled('twitter')">
-                    𝕏 Queue Twitter
+                <button type="button" class="btn d-inline-flex align-items-center gap-1" style="background-color: #000000; color: white;" onclick="queueAllUnscheduled('twitter')">
+                    <i class="bi bi-twitter-x"></i> Queue Twitter
                 </button>
-                <button type="button" class="btn" style="background-color: #E4405F; color: white;" onclick="queueAllUnscheduled('instagram')">
-                    📷 Queue Instagram
+                <button type="button" class="btn d-inline-flex align-items-center gap-1" style="background-color: #E4405F; color: white;" onclick="queueAllUnscheduled('instagram')">
+                    <i class="bi bi-instagram"></i> Queue Instagram
                 </button>
-                <button type="button" class="btn btn-success" onclick="queueAllBothPlatforms()">
-                    🚀 Queue All
+                <button type="button" class="btn btn-success d-inline-flex align-items-center gap-1" onclick="queueAllBothPlatforms()">
+                    <i class="bi bi-rocket-takeoff"></i> Queue All
                 </button>
             </div>
         </div>
@@ -7146,9 +7146,15 @@ function importFile() {
 
         if (data.by_platform && Object.keys(data.by_platform).length > 0) {
             html += '<div class="mt-2">';
-            const icons = {threads: '🧵', linkedin: '💼', facebook: '📘'};
+            const icons = {
+                threads: '<i class="bi bi-threads me-1"></i>',
+                linkedin: '<i class="bi bi-linkedin me-1"></i>',
+                facebook: '<i class="bi bi-facebook me-1"></i>',
+                twitter: '<i class="bi bi-twitter-x me-1"></i>',
+                instagram: '<i class="bi bi-instagram me-1"></i>',
+            };
             for (const [plat, count] of Object.entries(data.by_platform)) {
-                html += '<span class="badge bg-primary me-1">' + (icons[plat] || '') + ' ' + plat + ': ' + count + '</span>';
+                html += '<span class="badge bg-primary me-1">' + (icons[plat] || '') + plat + ': ' + count + '</span>';
             }
             html += '</div>';
         }

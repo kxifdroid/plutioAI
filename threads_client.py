@@ -36,8 +36,8 @@ class ThreadsClient:
         redirect_uri: str | None = None,
     ):
         """Initialize the Threads client with credentials from env or params."""
-        self.app_id = app_id or os.environ.get("THREADS_APP_ID")
-        self.app_secret = app_secret or os.environ.get("THREADS_APP_SECRET")
+        self.app_id = app_id or os.environ.get("THREADS_APP_ID") or os.environ.get("META_APP_ID")
+        self.app_secret = app_secret or os.environ.get("THREADS_APP_SECRET") or os.environ.get("META_APP_SECRET")
         self.redirect_uri = redirect_uri or os.environ.get(
             "THREADS_REDIRECT_URI", "https://localhost:5001/threads/callback"
         )

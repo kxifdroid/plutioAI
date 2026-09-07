@@ -253,7 +253,7 @@
                     👁️ View
                 </button>
                 <button type="button" class="btn btn-sm btn-outline-danger" 
-                        onclick="confirmDeleteSource({{ source.id }}, '{{ source.title|e }}')" title="Delete">
+                        onclick="confirmDeleteSource({{ source.id }}, this)" title="Delete">
                     🗑️
                 </button>
             </div>
@@ -392,10 +392,11 @@ let currentSourceId = null;
 let addUrlModal = null;
 
 const PLATFORM_META = {
-    linkedin: { label: 'LinkedIn', icon: '💼', badge: 'bg-primary' },
-    threads: { label: 'Threads', icon: '🧵', badge: 'bg-dark' },
-    facebook: { label: 'Facebook', icon: '📘', badge: 'bg-info' },
-    twitter: { label: 'X', icon: '𝕏', badge: 'bg-secondary' },
+    linkedin: { label: 'LinkedIn', icon: '<i class="bi bi-linkedin me-1" style="color: #0077B5;"></i>', badge: 'bg-primary' },
+    threads: { label: 'Threads', icon: '<i class="bi bi-threads me-1"></i>', badge: 'bg-dark' },
+    facebook: { label: 'Facebook', icon: '<i class="bi bi-facebook me-1" style="color: #1877F2;"></i>', badge: 'bg-info' },
+    twitter: { label: 'X', icon: '<i class="bi bi-twitter-x me-1"></i>', badge: 'bg-secondary' },
+    instagram: { label: 'Instagram', icon: '<i class="bi bi-instagram me-1" style="color: #E4405F;"></i>', badge: 'bg-danger' },
 };
 
 function viewSourcePosts(sourceId) {
@@ -466,10 +467,16 @@ function renderSourcePosts(posts) {
                         <span class="badge ${meta.badge}">${meta.icon} ${meta.label}</span>
                         ${postedBadge}
                     </div>
-                    <button type="button" class="btn btn-sm ${alreadyPosted ? 'btn-outline-secondary' : 'btn-primary'} repost-btn"
-                            onclick="repostSourcePost(${post.id}, '${post.platform}', this, ${alreadyPosted ? 'true' : 'false'})">
-                        ${repostLabel}
-                    </button>
+                    <div class="d-flex gap-2 align-items-center">
+                        <button type="button" class="btn btn-sm ${alreadyPosted ? 'btn-outline-secondary' : 'btn-primary'} repost-btn"
+                                onclick="repostSourcePost(${post.id}, '${post.platform}', this, ${alreadyPosted ? 'true' : 'false'})">
+                            ${repostLabel}
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-danger"
+                                onclick="deleteSourcePost(${post.id}, this)" title="Delete this post">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </div>
                 </div>
                 <div class="d-flex align-items-start">
                     <pre class="mb-0 flex-grow-1" style="white-space:pre-wrap;word-break:break-word;font-family:inherit;font-size:0.9rem;background:#f8f9fa;padding:0.75rem;border-radius:8px;">${escapeHtml(post.content)}</pre>
@@ -478,6 +485,50 @@ function renderSourcePosts(posts) {
             </div>
         `;
     }).join('');
+}
+
+function deleteSourcePost(postId, btn) {
+    if (!confirm('Are you sure you want to delete this post?')) return;
+    const postCard = btn.closest('[data-post-id]');
+    btn.disabled = true;
+    fetch(`/compose/post/${postId}/delete`, { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                if (postCard) postCard.remove();
+                if (currentSourceId) {
+                    const sourceCard = document.querySelector(`[data-source-id="${currentSourceId}"]`);
+                    if (sourceCard) {
+                        const postsBtn = sourceCard.querySelector('[onclick*="viewSourcePosts"]');
+                        if (postsBtn) {
+                            const match = postsBtn.textContent.match(/\((\d+)\)/);
+                            if (match) {
+                                const newCount = Math.max(0, parseInt(match[1]) - 1);
+                                postsBtn.innerHTML = `💬 Posts ${newCount ? `(${newCount})` : ''}`;
+                            }
+                        }
+                    }
+                }
+                const container = document.getElementById('sourcePostsContent');
+                if (container && container.querySelectorAll('[data-post-id]').length === 0) {
+                    container.innerHTML = `
+                        <div class="text-center py-4 text-muted">
+                            <p class="mb-2">No posts have been generated from this source yet.</p>
+                            <a href="{{ url_for('compose_page') }}?source_id=${currentSourceId}" class="btn btn-sm btn-primary">
+                                ✨ Generate Posts
+                            </a>
+                        </div>
+                    `;
+                }
+            } else {
+                alert(data.error || 'Failed to delete post');
+                btn.disabled = false;
+            }
+        })
+        .catch(() => {
+            alert('Failed to delete post');
+            btn.disabled = false;
+        });
 }
 
 function repostSourcePost(postId, platform, btn, alreadyPosted) {
@@ -702,7 +753,7 @@ function addSourceCardToPage(source, opts) {
                 👁️ View
             </button>
             <button type="button" class="btn btn-sm btn-outline-danger" 
-                    onclick="confirmDeleteSource(${source.id}, '${escapeHtml(source.title)}')" title="Delete">
+                    onclick="confirmDeleteSource(${source.id}, this)" title="Delete">
                 🗑️
             </button>`;
         
@@ -912,10 +963,23 @@ function refreshSource(sourceId) {
         });
 }
 
-function confirmDeleteSource(sourceId, title) {
+function confirmDeleteSource(sourceId, btnOrTitle) {
     deleteSourceId = sourceId;
+    let title = 'this source';
+    if (typeof btnOrTitle === 'string') {
+        title = btnOrTitle;
+    } else if (btnOrTitle && btnOrTitle.closest) {
+        const card = btnOrTitle.closest('.source-card');
+        if (card) {
+            const titleEl = card.querySelector('.source-title');
+            if (titleEl) {
+                title = titleEl.textContent.trim();
+            }
+        }
+    }
     document.getElementById('deleteSourceTitle').textContent = title || 'this source';
-    const modal = new bootstrap.Modal(document.getElementById('deleteModal'));
+    const modalEl = document.getElementById('deleteModal');
+    const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
     modal.show();
 }
 
@@ -932,7 +996,11 @@ function deleteSource() {
                     card.remove();
                 }
                 // Close modal
-                bootstrap.Modal.getInstance(document.getElementById('deleteModal')).hide();
+                const modalEl = document.getElementById('deleteModal');
+                const modalInstance = bootstrap.Modal.getInstance(modalEl) || bootstrap.Modal.getOrCreateInstance(modalEl);
+                if (modalInstance) {
+                    modalInstance.hide();
+                }
                 
                 // Check if no sources left
                 const remainingCards = document.querySelectorAll('.source-card');

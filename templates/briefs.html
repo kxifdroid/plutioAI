@@ -22,6 +22,8 @@
     </div>
 </div>
 
+<div id="brief-alert-container"></div>
+
 <div class="d-flex justify-content-between align-items-center mb-3">
     <span class="results-count">{{ briefs|length }} brief{% if briefs|length != 1 %}s{% endif %} configured</span>
 </div>
@@ -48,9 +50,15 @@
             </td>
             <td><span class="badge bg-secondary text-capitalize">{{ b.content_type }}</span></td>
             <td>
-                <div class="d-flex gap-1">
+                <div class="d-flex gap-2 align-items-center">
                 {% for p in b.platforms_list %}
-                    <span class="badge bg-secondary border" title="{{ p }}" style="font-size:0.68rem;">{{ p[:2]|upper }}</span>
+                    {% if p == 'linkedin' %}<i class="bi bi-linkedin" title="LinkedIn" style="color: #0077B5; font-size:1.05rem;"></i>
+                    {% elif p == 'threads' %}<i class="bi bi-threads" title="Threads" style="color: #000000; font-size:1.05rem;"></i>
+                    {% elif p == 'twitter' %}<i class="bi bi-twitter-x" title="Twitter" style="color: #000000; font-size:1.05rem;"></i>
+                    {% elif p == 'facebook' %}<i class="bi bi-facebook" title="Facebook" style="color: #1877F2; font-size:1.05rem;"></i>
+                    {% elif p == 'instagram' %}<i class="bi bi-instagram" title="Instagram" style="color: #E4405F; font-size:1.05rem;"></i>
+                    {% else %}<span class="badge bg-secondary border" title="{{ p }}" style="font-size:0.68rem;">{{ p[:2]|upper }}</span>
+                    {% endif %}
                 {% endfor %}
                 </div>
             </td>
@@ -148,10 +156,10 @@
           <div class="mb-3" id="platforms-group">
             <label class="form-label">Platforms</label>
             <div>
-              {% for p, icon in [('linkedin','LinkedIn'), ('threads','Threads'), ('twitter','X / Twitter'), ('facebook','Facebook'), ('instagram','Instagram')] %}
+              {% for p, icon, iclass, icolor in [('linkedin','LinkedIn','bi-linkedin','#0077B5'), ('threads','Threads','bi-threads','#000000'), ('twitter','X / Twitter','bi-twitter-x','#000000'), ('facebook','Facebook','bi-facebook','#1877F2'), ('instagram','Instagram','bi-instagram','#E4405F')] %}
               <div class="form-check form-check-inline">
                 <input class="form-check-input plat-check" type="checkbox" name="platforms" value="{{ p }}" id="f-plat-{{ p }}">
-                <label class="form-check-label" for="f-plat-{{ p }}">{{ icon }}</label>
+                <label class="form-check-label d-inline-flex align-items-center gap-1" for="f-plat-{{ p }}"><i class="bi {{ iclass }}" style="color: {{ icolor }};"></i> {{ icon }}</label>
               </div>
               {% endfor %}
             </div>
@@ -373,22 +381,64 @@ async function runBrief(id) {
 async function pollRun(briefId, runId) {
     const btn = document.getElementById('run-btn-' + briefId);
     const statusEl = document.getElementById('run-status-' + briefId);
+    const alertBox = document.getElementById('brief-alert-container');
     try {
         const resp = await fetch(`/briefs/runs/${runId}`);
         const run = await resp.json();
         if (run.status === 'running') {
+            if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>Running…'; }
             if (statusEl) { statusEl.textContent = 'running'; statusEl.className = 'badge bg-info text-dark'; }
             setTimeout(() => pollRun(briefId, runId), 2500);
             return;
         }
-        btn.disabled = false; btn.textContent = 'Run';
+        if (btn) { btn.disabled = false; btn.textContent = 'Run'; }
         if (statusEl) {
             statusEl.textContent = run.status;
             statusEl.className = 'badge ' + (run.status === 'success' ? 'bg-success' : run.status === 'partial' ? 'bg-warning text-dark' : 'bg-danger');
+            const parentTd = statusEl.parentElement;
+            if (parentTd) {
+                const countDiv = parentTd.querySelector('.text-muted.small');
+                if (countDiv) {
+                    countDiv.textContent = `${run.posts_created || 0} posts · ${run.articles_created || 0} articles`;
+                }
+            }
         }
-        setTimeout(() => window.location.reload(), 800);
+
+        if (alertBox) {
+            if (run.status === 'success' || run.status === 'partial') {
+                const postsCount = run.posts_created || 0;
+                const artsCount = run.articles_created || 0;
+                alertBox.innerHTML = `
+                <div class="alert alert-success alert-dismissible fade show d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 shadow-sm border-0 my-3 p-3" role="alert" style="background-color: #ecfdf5; border-left: 4px solid #10b981 !important; border-radius: 8px;">
+                    <div>
+                        <div class="d-flex align-items-center gap-2 mb-1">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                            <strong class="text-success" style="font-size: 1.05rem;">Content Generation Complete!</strong>
+                        </div>
+                        <div class="text-secondary small">
+                            Successfully created <strong>${postsCount} post${postsCount === 1 ? '' : 's'}</strong> and <strong>${artsCount} article${artsCount === 1 ? '' : 's'}</strong> ready for your review.
+                            ${run.status === 'partial' ? '<span class="text-warning-emphasis ms-1">(Some warnings occurred during run)</span>' : ''}
+                        </div>
+                    </div>
+                    <div class="d-flex gap-2 align-items-center flex-wrap">
+                        <a href="/compose" class="btn btn-primary btn-sm px-3 fw-medium">Go to Create Page &rarr;</a>
+                        ${artsCount > 0 ? '<a href="/articles" class="btn btn-outline-secondary btn-sm px-3">View Articles</a>' : ''}
+                        <button type="button" class="btn-close ms-2" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                </div>`;
+                alertBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            } else if (run.status === 'failed') {
+                alertBox.innerHTML = `
+                <div class="alert alert-danger alert-dismissible fade show d-flex justify-content-between align-items-center shadow-sm border-0 my-3 p-3" role="alert" style="border-radius: 8px;">
+                    <div>
+                        <strong>Generation Failed:</strong> ${run.error_message || 'An error occurred during content generation.'}
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>`;
+            }
+        }
     } catch (e) {
-        btn.disabled = false; btn.textContent = 'Run';
+        if (btn) { btn.disabled = false; btn.textContent = 'Run'; }
     }
 }
 

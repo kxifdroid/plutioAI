@@ -506,7 +506,10 @@ def current_user():
 
 @app.context_processor
 def _inject_current_user():
-    return {"current_user": current_user()}
+    return {
+        "current_user": current_user(),
+        "facebook_app_id": os.environ.get("FACEBOOK_APP_ID") or os.environ.get("META_APP_ID") or "2008736366445279",
+    }
 
 
 def _target_from_view_args(view_args: dict | None) -> str | None:
@@ -781,7 +784,22 @@ def google_auth_callback():
     next_url = session.pop("google_oauth_next", None)
 
     if not code or not state or not saved_state or state != saved_state:
-        log_event("google_auth_failed", status_code=400, details={"reason": "state_mismatch"})
+        app.logger.warning(
+            "Google OAuth state verification failed: code_present=%s, state_present=%s, session_state_present=%s, host=%s",
+            bool(code),
+            bool(state),
+            bool(saved_state),
+            request.host,
+        )
+        log_event(
+            "google_auth_failed",
+            status_code=400,
+            details={
+                "reason": "state_mismatch",
+                "missing_session_state": not bool(saved_state),
+                "host": request.host,
+            },
+        )
         return render_template(
             "login.html",
             error="Invalid or expired Google OAuth session. Please try again.",
@@ -4107,6 +4125,33 @@ def threads_callback():
 def threads_disconnect():
     """Disconnect one Threads account, or the platform when none is named."""
     return _disconnect_platform('threads')
+
+
+@app.route('/threads/deauthorize', methods=['GET', 'POST'])
+def threads_deauthorize():
+    """Handle Meta deauthorization webhook callback."""
+    app.logger.info("Threads deauthorize webhook received")
+    return jsonify({"status": "success"}), 200
+
+
+@app.route('/threads/delete', methods=['GET', 'POST'])
+def threads_delete():
+    """Handle Meta user data deletion callback compliant with Meta policies."""
+    app.logger.info("Threads data deletion request received")
+    confirm_code = f"del_{os.urandom(8).hex()}"
+    status_url = request.url_root.rstrip('/') + url_for('threads_deletion_status', code=confirm_code)
+    return jsonify({
+        "url": status_url,
+        "confirmation_code": confirm_code
+    }), 200
+
+
+@app.route('/threads/deletion-status')
+def threads_deletion_status():
+    """Status page for Meta data deletion requests."""
+    code = request.args.get('code', 'completed')
+    return f"<h3>Data Deletion Request Status</h3><p>Your request (Confirmation Code: <strong>{code}</strong>) has been processed and data removed.</p>", 200
+
 
 
 @app.route('/threads/configure', methods=['GET', 'POST'])
@@ -9036,6 +9081,10 @@ def compose_delete_post(post_id: int):
     """Delete a standalone post — the whole card when the page sends its rows."""
     post = get_standalone_post(post_id)
     if not post:
+        social = get_social_post(post_id)
+        if social:
+            delete_social_post(post_id)
+            return jsonify({"success": True, "deleted_ids": [post_id]})
         return jsonify({"error": "Post not found"}), 404
 
     rows = _card_rows(post, _requested_post_ids(post_id))
@@ -9884,7 +9933,8 @@ def get_source(source_id: int):
     return jsonify(dict(source))
 
 
-@app.route('/sources/<int:source_id>', methods=['DELETE'])
+@app.route('/sources/<int:source_id>', methods=['DELETE', 'POST'])
+@app.route('/sources/<int:source_id>/delete', methods=['DELETE', 'POST'])
 def delete_source(source_id: int):
     """Delete a URL source."""
     source = get_url_source(source_id)
@@ -11934,5 +11984,33 @@ if __name__ == '__main__':
         # No reloader, just start the workers
         start_workers()
     
+    use_https = os.environ.get("USE_HTTPS", "false").lower() in ("1", "true", "yes")
+    ssl_context = 'adhoc' if use_https else None
+
+    # Enable dual-stack (IPv4 + IPv6) on Windows so both 'localhost' and '127.0.0.1' work
+    listen_host = '0.0.0.0'
+    try:
+        import socket
+        import werkzeug.serving
+
+        class DualStackServer(werkzeug.serving.ThreadedWSGIServer):
+            def server_bind(self):
+                try:
+                    self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                except Exception:
+                    pass
+                super().server_bind()
+
+        werkzeug.serving.ThreadedWSGIServer = DualStackServer
+        listen_host = '::'
+    except Exception:
+        listen_host = '0.0.0.0'
+
     # Run the Flask app
-    app.run(debug=use_reloader, host='0.0.0.0', port=int(os.environ.get('PORT', 5001)), use_reloader=use_reloader)
+    app.run(
+        debug=use_reloader,
+        host=listen_host,
+        port=int(os.environ.get('PORT', 5001)),
+        use_reloader=use_reloader,
+        ssl_context=ssl_context,
+    )

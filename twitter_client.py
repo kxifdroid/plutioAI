@@ -49,10 +49,11 @@ class TwitterClient:
         client_secret: str | None = None,
         redirect_uri: str | None = None,
     ):
-        self.client_id = client_id or os.environ.get("TWITTER_CLIENT_ID")
-        self.client_secret = client_secret or os.environ.get("TWITTER_CLIENT_SECRET")
+        self.client_id = client_id or os.environ.get("TWITTER_CLIENT_ID") or os.environ.get("X_CLIENT_ID")
+        self.client_secret = client_secret or os.environ.get("TWITTER_CLIENT_SECRET") or os.environ.get("X_CLIENT_SECRET")
         self.redirect_uri = redirect_uri or os.environ.get(
-            "TWITTER_REDIRECT_URI", "http://localhost:5001/twitter/callback"
+            "TWITTER_REDIRECT_URI",
+            os.environ.get("X_REDIRECT_URI", "http://localhost:5001/twitter/callback")
         )
 
     def is_configured(self) -> bool:

@@ -17,7 +17,7 @@ from urllib.parse import urlparse, parse_qs
 # Defaults to OpenAI so existing deployments are unaffected. Local generation is
 # selected per-call via ``use_local`` and always uses the Ollama (OpenAI-compatible)
 # path regardless of this setting.
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai").strip().lower()
+LLM_PROVIDER = (os.environ.get("LLM_PROVIDER") or os.environ.get("AI_PROVIDER") or "openai").strip().lower()
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")

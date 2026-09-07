@@ -71,7 +71,7 @@
 <!-- LinkedIn Connection Status -->
 <div class="card mt-4 mb-3" id="linkedin-card">
     <div class="card-header d-flex justify-content-between align-items-center" >
-        <strong>💼 LinkedIn Integration</strong>
+        <strong><i class="bi bi-linkedin me-1" style="color: #0077B5;"></i> LinkedIn Integration</strong>
         <span id="linkedin-status-badge" class="badge bg-secondary">Checking...</span>
     </div>
     <div class="card-body py-2">
@@ -148,8 +148,8 @@
                 </select>
                 <select class="form-select form-select-sm" style="width: auto;" id="filter-platform" onchange="applyPostFilters()">
                     <option value="">All Platforms</option>
-                    <option value="linkedin">💼 LinkedIn</option>
-                    <option value="threads">🧵 Threads</option>
+                    <option value="linkedin">LinkedIn</option>
+                    <option value="threads">Threads</option>
                 </select>
                 <button class="btn btn-sm btn-outline-secondary" onclick="clearPostFilters()" title="Clear Filters">✕</button>
                 <span class="text-muted small ms-2" id="filter-results-count"></span>
@@ -161,7 +161,7 @@
                     <div class="social-copy-header d-flex justify-content-between align-items-center" style="background-color: var(--platform-{{ platform }}-color, #6c757d)">
                         <div>
                             <span class="social-icon">
-                                {% if platform == 'twitter' %}𝕏{% elif platform == 'linkedin' %}💼{% elif platform == 'facebook' %}📘{% elif platform == 'threads' %}🧵{% elif platform == 'instagram' %}📷{% else %}📱{% endif %}
+                                {% if platform == 'twitter' %}<i class="bi bi-twitter-x"></i>{% elif platform == 'linkedin' %}<i class="bi bi-linkedin"></i>{% elif platform == 'facebook' %}<i class="bi bi-facebook"></i>{% elif platform == 'threads' %}<i class="bi bi-threads"></i>{% elif platform == 'instagram' %}<i class="bi bi-instagram"></i>{% else %}<i class="bi bi-share"></i>{% endif %}
                             </span>
                             <span class="social-platform">{{ platform|capitalize }}</span>
                             <span class="badge bg-light text-dark ms-2">{{ posts|length }} post{% if posts|length != 1 %}s{% endif %}</span>
@@ -203,7 +203,7 @@
                                     </button>
                                     {% if platform == 'linkedin' %}
                                     <button class="btn btn-outline-info linkedin-post-btn" onclick="postToLinkedIn({{ post.id }}, this)" title="Post to LinkedIn Now" data-post-id="{{ post.id }}">
-                                        💼
+                                        <i class="bi bi-linkedin"></i>
                                     </button>
                                     {% if post.scheduled and post.scheduled.linkedin %}
                                     <button class="btn btn-success queue-toggle-btn" onclick="toggleQueue({{ post.id }}, 'social', 'linkedin', this, true)" title="Click to remove from queue (Scheduled: {{ post.scheduled.linkedin }})" data-post-id="{{ post.id }}" data-platform="linkedin" data-queued="true">

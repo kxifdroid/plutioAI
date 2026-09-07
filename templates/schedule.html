@@ -68,7 +68,7 @@ th[onclick]:hover {
     <div class="col-md mb-3 mb-md-0">
         <div class="card h-100">
             <div class="card-header d-flex justify-content-between align-items-center" >
-                <strong>💼 LinkedIn</strong>
+                <strong class="d-flex align-items-center gap-2"><i class="bi bi-linkedin" style="color: #0077B5; font-size: 1.15rem;"></i> LinkedIn</strong>
                 <span id="linkedin-status-badge" class="badge bg-secondary">Checking...</span>
             </div>
             <div class="card-body social-card-body">
@@ -86,7 +86,7 @@ th[onclick]:hover {
     <div class="col-md mb-3 mb-md-0">
         <div class="card h-100">
             <div class="card-header d-flex justify-content-between align-items-center" >
-                <strong>🧵 Threads</strong>
+                <strong class="d-flex align-items-center gap-2"><i class="bi bi-threads" style="color: #000000; font-size: 1.15rem;"></i> Threads</strong>
                 <span id="threads-status-badge" class="badge bg-secondary">Checking...</span>
             </div>
             <div class="card-body social-card-body">
@@ -104,7 +104,7 @@ th[onclick]:hover {
     <div class="col-md mb-3 mb-md-0">
         <div class="card h-100">
             <div class="card-header d-flex justify-content-between align-items-center" >
-                <strong>📘 Facebook</strong>
+                <strong class="d-flex align-items-center gap-2"><i class="bi bi-facebook" style="color: #1877F2; font-size: 1.15rem;"></i> Facebook</strong>
                 <span id="facebook-status-badge" class="badge bg-secondary">Checking...</span>
             </div>
             <div class="card-body social-card-body">
@@ -122,7 +122,7 @@ th[onclick]:hover {
     <div class="col-md mb-3 mb-md-0">
         <div class="card h-100">
             <div class="card-header d-flex justify-content-between align-items-center" >
-                <strong>𝕏 Twitter</strong>
+                <strong class="d-flex align-items-center gap-2"><i class="bi bi-twitter-x" style="color: #000000; font-size: 1.15rem;"></i> X / Twitter</strong>
                 <span id="twitter-status-badge" class="badge bg-secondary">Checking...</span>
             </div>
             <div class="card-body social-card-body">
@@ -140,7 +140,7 @@ th[onclick]:hover {
     <div class="col-md">
         <div class="card h-100">
             <div class="card-header d-flex justify-content-between align-items-center" >
-                <strong>📷 Instagram</strong>
+                <strong class="d-flex align-items-center gap-2"><i class="bi bi-instagram" style="color: #E4405F; font-size: 1.15rem;"></i> Instagram</strong>
                 <span id="instagram-status-badge" class="badge bg-secondary">Checking...</span>
             </div>
             <div class="card-body social-card-body">
@@ -175,7 +175,7 @@ th[onclick]:hover {
                 </div>
                 <div class="row mt-2">
                     <div class="col-md">
-                        <span class="badge" style="background-color: #0077B5;">💼 LinkedIn</span>
+                        <span class="badge" style="background-color: #0077B5;"><i class="bi bi-linkedin me-1"></i> LinkedIn</span>
                         <span id="next-slot-linkedin">
                             {% if next_slots and next_slots.linkedin %}
                             {{ next_slots.linkedin }}
@@ -185,7 +185,7 @@ th[onclick]:hover {
                         </span>
                     </div>
                     <div class="col-md">
-                        <span class="badge bg-dark">🧵 Threads</span>
+                        <span class="badge bg-dark"><i class="bi bi-threads me-1"></i> Threads</span>
                         <span id="next-slot-threads">
                             {% if next_slots and next_slots.threads %}
                             {{ next_slots.threads }}
@@ -195,7 +195,7 @@ th[onclick]:hover {
                         </span>
                     </div>
                     <div class="col-md">
-                        <span class="badge" style="background-color: #1877F2;">📘 Facebook</span>
+                        <span class="badge" style="background-color: #1877F2;"><i class="bi bi-facebook me-1"></i> Facebook</span>
                         <span id="next-slot-facebook">
                             {% if next_slots and next_slots.facebook %}
                             {{ next_slots.facebook }}
@@ -205,7 +205,7 @@ th[onclick]:hover {
                         </span>
                     </div>
                     <div class="col-md">
-                        <span class="badge" style="background-color: #1DA1F2;">𝕏 Twitter</span>
+                        <span class="badge" style="background-color: #000000;"><i class="bi bi-twitter-x me-1"></i> X / Twitter</span>
                         <span id="next-slot-twitter">
                             {% if next_slots and next_slots.twitter %}
                             {{ next_slots.twitter }}
@@ -215,7 +215,7 @@ th[onclick]:hover {
                         </span>
                     </div>
                     <div class="col-md">
-                        <span class="badge" style="background-color: #E4405F;">📷 Instagram</span>
+                        <span class="badge" style="background-color: #E4405F;"><i class="bi bi-instagram me-1"></i> Instagram</span>
                         <span id="next-slot-instagram">
                             {% if next_slots and next_slots.instagram %}
                             {{ next_slots.instagram }}
@@ -377,7 +377,7 @@ th[onclick]:hover {
                     <div class="card h-100" style="border-left: 4px solid #0077B5;">
                         <div class="card-body">
                             <div class="d-flex justify-content-between align-items-center mb-2">
-                                <span class="fw-bold">💼 LinkedIn</span>
+                                <span class="fw-bold"><i class="bi bi-linkedin me-1" style="color: #0077B5;"></i> LinkedIn</span>
                                 <span class="badge bg-info" id="linkedin-limit-badge">
                                     {{ daily_limits.get('linkedin', 0) or 'Unlimited' }}{% if daily_limits.get('linkedin', 0) %}/day{% endif %}
                                 </span>
@@ -400,7 +400,7 @@ th[onclick]:hover {
                     <div class="card h-100" style="border-left: 4px solid #000000;">
                         <div class="card-body">
                             <div class="d-flex justify-content-between align-items-center mb-2">
-                                <span class="fw-bold">🧵 Threads</span>
+                                <span class="fw-bold"><i class="bi bi-threads me-1" style="color: #000000;"></i> Threads</span>
                                 <span class="badge bg-dark" id="threads-limit-badge">
                                     {{ daily_limits.get('threads', 0) or 'Unlimited' }}{% if daily_limits.get('threads', 0) %}/day{% endif %}
                                 </span>
@@ -423,7 +423,7 @@ th[onclick]:hover {
                     <div class="card h-100" style="border-left: 4px solid #1877F2;">
                         <div class="card-body">
                             <div class="d-flex justify-content-between align-items-center mb-2">
-                                <span class="fw-bold">📘 Facebook</span>
+                                <span class="fw-bold"><i class="bi bi-facebook me-1" style="color: #1877F2;"></i> Facebook</span>
                                 <span class="badge" style="background-color: #1877F2;" id="facebook-limit-badge">
                                     {{ daily_limits.get('facebook', 0) or 'Unlimited' }}{% if daily_limits.get('facebook', 0) %}/day{% endif %}
                                 </span>
@@ -446,7 +446,7 @@ th[onclick]:hover {
                     <div class="card h-100" style="border-left: 4px solid #E4405F;">
                         <div class="card-body">
                             <div class="d-flex justify-content-between align-items-center mb-2">
-                                <span class="fw-bold">📷 Instagram</span>
+                                <span class="fw-bold"><i class="bi bi-instagram me-1" style="color: #E4405F;"></i> Instagram</span>
                                 <span class="badge" style="background-color: #E4405F;" id="instagram-limit-badge">
                                     {{ daily_limits.get('instagram', 0) or 'Unlimited' }}{% if daily_limits.get('instagram', 0) %}/day{% endif %}
                                 </span>
@@ -485,11 +485,11 @@ th[onclick]:hover {
                     </select>
                     <select name="platform" class="form-select form-select-sm" style="width: auto;" onchange="refreshQueue()">
                         <option value="">All Platforms</option>
-                        <option value="linkedin" {% if platform_filter == 'linkedin' %}selected{% endif %}>💼 LinkedIn</option>
-                        <option value="threads" {% if platform_filter == 'threads' %}selected{% endif %}>🧵 Threads</option>
-                        <option value="facebook" {% if platform_filter == 'facebook' %}selected{% endif %}>📘 Facebook</option>
-                        <option value="twitter" {% if platform_filter == 'twitter' %}selected{% endif %}>𝕏 Twitter</option>
-                        <option value="instagram" {% if platform_filter == 'instagram' %}selected{% endif %}>📷 Instagram</option>
+                        <option value="linkedin" {% if platform_filter == 'linkedin' %}selected{% endif %}>LinkedIn</option>
+                        <option value="threads" {% if platform_filter == 'threads' %}selected{% endif %}>Threads</option>
+                        <option value="facebook" {% if platform_filter == 'facebook' %}selected{% endif %}>Facebook</option>
+                        <option value="twitter" {% if platform_filter == 'twitter' %}selected{% endif %}>Twitter / X</option>
+                        <option value="instagram" {% if platform_filter == 'instagram' %}selected{% endif %}>Instagram</option>
                     </select>
                     <div class="input-group input-group-sm" style="width: auto;">
                         <span class="input-group-text">From</span>
@@ -506,9 +506,9 @@ th[onclick]:hover {
                     <a href="{{ url_for('schedule_list') }}{% if sort_order != 'asc' %}?sort={{ sort_order }}{% endif %}" class="btn btn-sm btn-outline-secondary" title="Clear Filters">✕</a>
                     {% endif %}
                 </form>
-                <span class="badge" style="background-color: #0077B5;" id="queue-linkedin-badge">💼 {{ linkedin_count }}</span>
-                <span class="badge bg-dark" id="queue-threads-badge">🧵 {{ threads_count }}</span>
-                <span class="badge" style="background-color: #1877F2;" id="queue-facebook-badge">📘 {{ facebook_count }}</span>
+                <span class="badge" style="background-color: #0077B5;" id="queue-linkedin-badge"><i class="bi bi-linkedin me-1"></i> {{ linkedin_count }}</span>
+                <span class="badge bg-dark" id="queue-threads-badge"><i class="bi bi-threads me-1"></i> {{ threads_count }}</span>
+                <span class="badge" style="background-color: #1877F2;" id="queue-facebook-badge"><i class="bi bi-facebook me-1"></i> {{ facebook_count }}</span>
                 <span class="badge bg-secondary" id="queue-total-badge">{{ scheduled_posts|length }} total</span>
                 <button class="btn btn-sm btn-outline-primary d-none" id="move-top-btn" onclick="moveSelectedToTop()" title="Move selected to top of queue">
                     ⬆️ Move to Top
@@ -615,13 +615,15 @@ th[onclick]:hover {
                         </td>
                         <td>
                             {% if post.platform == 'linkedin' %}
-                            <span class="badge" style="background-color: #0077B5;">💼 LinkedIn</span>
+                            <span class="badge" style="background-color: #0077B5;"><i class="bi bi-linkedin me-1"></i> LinkedIn</span>
                             {% elif post.platform == 'threads' %}
-                            <span class="badge" style="background-color: #000000;">🧵 Threads</span>
+                            <span class="badge" style="background-color: #000000;"><i class="bi bi-threads me-1"></i> Threads</span>
                             {% elif post.platform == 'twitter' %}
-                            <span class="badge" style="background-color: #000000;">𝕏 twitter</span>
+                            <span class="badge" style="background-color: #000000;"><i class="bi bi-twitter-x me-1"></i> Twitter</span>
+                            {% elif post.platform == 'facebook' %}
+                            <span class="badge" style="background-color: #1877F2;"><i class="bi bi-facebook me-1"></i> Facebook</span>
                             {% elif post.platform == 'instagram' %}
-                            <span class="badge" style="background-color: #E4405F;">📷 Instagram</span>
+                            <span class="badge" style="background-color: #E4405F;"><i class="bi bi-instagram me-1"></i> Instagram</span>
                             {% else %}
                             <span class="badge bg-secondary">{{ post.platform }}</span>
                             {% endif %}
@@ -1163,9 +1165,9 @@ function refreshQueue() {
             
             if (data.success) {
                 // Update badges
-                if (linkedinBadge) linkedinBadge.innerHTML = `💼 ${data.linkedin_count}`;
-                if (threadsBadge) threadsBadge.innerHTML = `🧵 ${data.threads_count}`;
-                if (facebookBadge) facebookBadge.innerHTML = `📘 ${data.facebook_count}`;
+                if (linkedinBadge) linkedinBadge.innerHTML = `<i class="bi bi-linkedin me-1"></i> ${data.linkedin_count}`;
+                if (threadsBadge) threadsBadge.innerHTML = `<i class="bi bi-threads me-1"></i> ${data.threads_count}`;
+                if (facebookBadge) facebookBadge.innerHTML = `<i class="bi bi-facebook me-1"></i> ${data.facebook_count}`;
                 if (totalBadge) totalBadge.textContent = `${data.total_count} total`;
                 
                 // Rebuild table body
@@ -1257,11 +1259,11 @@ function getStatusBadge(status, errorMessage) {
 
 function getPlatformBadge(platform) {
     switch(platform) {
-        case 'linkedin': return '<span class="badge" style="background-color: #0077B5;">💼 LinkedIn</span>';
-        case 'threads': return '<span class="badge" style="background-color: #000000;">🧵 Threads</span>';
-        case 'twitter': return '<span class="badge" style="background-color: #000000;">𝕏 twitter</span>';
-        case 'facebook': return '<span class="badge" style="background-color: #1877F2;">📘 Facebook</span>';
-        case 'instagram': return '<span class="badge" style="background-color: #E4405F;">📷 Instagram</span>';
+        case 'linkedin': return '<span class="badge" style="background-color: #0077B5;"><i class="bi bi-linkedin me-1"></i> LinkedIn</span>';
+        case 'threads': return '<span class="badge" style="background-color: #000000;"><i class="bi bi-threads me-1"></i> Threads</span>';
+        case 'twitter': return '<span class="badge" style="background-color: #000000;"><i class="bi bi-twitter-x me-1"></i> Twitter</span>';
+        case 'facebook': return '<span class="badge" style="background-color: #1877F2;"><i class="bi bi-facebook me-1"></i> Facebook</span>';
+        case 'instagram': return '<span class="badge" style="background-color: #E4405F;"><i class="bi bi-instagram me-1"></i> Instagram</span>';
         default: return `<span class="badge bg-secondary">${platform}</span>`;
     }
 }
@@ -2262,13 +2264,13 @@ function openEditContentModal(postId, postType, platform, currentContent, curren
     
     // Show platform indicator
     const platformLabels = {
-        linkedin: '💼 LinkedIn',
-        threads: '🧵 Threads',
-        twitter: '𝕏 Twitter',
-        facebook: '📘 Facebook',
-        instagram: '📷 Instagram',
+        linkedin: '<i class="bi bi-linkedin me-1" style="color: #0077B5;"></i> LinkedIn',
+        threads: '<i class="bi bi-threads me-1"></i> Threads',
+        twitter: '<i class="bi bi-twitter-x me-1"></i> Twitter',
+        facebook: '<i class="bi bi-facebook me-1" style="color: #1877F2;"></i> Facebook',
+        instagram: '<i class="bi bi-instagram me-1" style="color: #E4405F;"></i> Instagram',
     };
-    document.getElementById('edit-content-platform').textContent = platformLabels[platform] || platform;
+    document.getElementById('edit-content-platform').innerHTML = platformLabels[platform] || platform;
     
     // Reset image UI
     resetContentImageUI();
